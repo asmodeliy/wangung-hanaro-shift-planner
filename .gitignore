@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+*.log
+.DS_Store
+.env
+.env.*
+outputs/
+work/
+.vibe/config.local.json
+.impeccable/review/
+.impeccable/mocks/

@@ -1,0 +1,14 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');
+
+:root { font-family: 'DM Sans', 'Noto Sans KR', sans-serif; color: #23342d; background: #f6f5ef; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; --ink: #23342d; --muted: #718078; --line: #e5e6dc; --green: #176243; --green-dark: #124c36; --green-soft: #e8f1e9; --paper: #fffefa; --cream: #f6f5ef; --sun: #f1d595; --red: #bb5546; --red-soft: #fae8e1; --blue: #537f9d; --blue-soft: #e7eff4; font-optical-sizing: auto; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--cream); }
+button, input, select, textarea { font: inherit; }
+button { color: inherit; cursor: pointer; }
+button:disabled { cursor: default; }
+::selection { color: #123d2d; background: #d6e9d8; }
+:focus-visible { outline: 3px solid #dba938; outline-offset: 3px; }
+input, select, textarea { color: var(--ink); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #f0efe8; }
+::-webkit-scrollbar-thumb { border: 2px solid #f0efe8; border-radius: 8px; background: #b7c2b6; }
