@@ -161,6 +161,18 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', (req, res) => { clearSession(req, res); res.status(204).end() })
 app.get('/api/auth/me', requireUser, (req, res) => res.json({ user: safeUser(req.user) }))
 app.use('/api', (req, res, next) => ['/auth/status', '/auth/setup', '/auth/login', '/auth/logout', '/auth/me', '/health'].includes(req.path) ? next() : requireUser(req, res, next))
+app.put('/api/auth/password', (req, res) => {
+  const currentPassword = String(req.body?.currentPassword ?? '')
+  const newPassword = String(req.body?.newPassword ?? '')
+  if (newPassword.length < 10 || newPassword.length > 128) return res.status(400).json({ error: '새 비밀번호는 10~128자로 입력해 주세요.' })
+  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id)
+  if (!user || !verifyPassword(currentPassword, user.password_hash)) return res.status(400).json({ error: '현재 비밀번호를 확인해 주세요.' })
+  const token = parseCookies(req.headers.cookie)[cookieName]
+  const digest = createHash('sha256').update(token).digest('hex')
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.user.id)
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(req.user.id, digest)
+  res.json({ ok: true })
+})
 
 app.get('/api/employees', (req, res) => {
   const rows = req.user.role === 'admin'

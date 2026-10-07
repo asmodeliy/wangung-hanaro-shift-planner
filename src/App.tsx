@@ -30,7 +30,7 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json()
 }
 
-function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'settings' | 'logout' | 'arrow' | 'plus' | 'clock' | 'check' | 'print' | 'spark' | 'menu'; size?: number }) {
+function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'settings' | 'logout' | 'arrow' | 'plus' | 'clock' | 'check' | 'print' | 'spark' | 'menu' | 'key'; size?: number }) {
   const paths: Record<typeof name, ReactNode> = {
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>,
     users: <><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></>,
@@ -39,7 +39,7 @@ function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'set
     logout: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>, plus: <path d="M12 5v14M5 12h14"/>,
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
-    check: <path d="m5 12 4 4L19 6"/>, print: <><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7z"/></>, spark: <><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>, menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>,
+    check: <path d="m5 12 4 4L19 6"/>, print: <><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7z"/></>, spark: <><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>, menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>, key: <><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7 2 2-2 2 1.5 1.5-2 2-1.5-1.5-3.9 3.9"/></>,
   }
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>
 }
@@ -70,6 +70,7 @@ function App() {
   const [holidayDate, setHolidayDate] = useState('')
   const [accountDialog, setAccountDialog] = useState<Employee | null>(null)
   const [showReference, setShowReference] = useState(false)
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('wangung-sidebar') !== 'expanded')
 
   const toggleSidebar = () => setSidebarCollapsed(value => {
@@ -173,6 +174,12 @@ function App() {
     try { await api(`/api/users/employee/${employee.id}`, { method: 'PUT', body: JSON.stringify({ username, password }) }); setAccountDialog(null); await load(); toast('직원 계정을 저장했습니다.') }
     catch (e) { setError(e instanceof Error ? e.message : '직원 계정을 저장하지 못했습니다.') }
   }
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    try {
+      await api('/api/auth/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) })
+      setShowPasswordDialog(false); setError(''); toast('비밀번호를 변경했습니다.')
+    } catch (e) { setError(e instanceof Error ? e.message : '비밀번호를 변경하지 못했습니다.') }
+  }
   const saveSettings = async (value: Settings) => {
     try { setSettings(await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(value) })); await load(); toast('근무 설정을 저장했습니다.') }
     catch (e) { setError(e instanceof Error ? e.message : '설정을 저장하지 못했습니다.') }
@@ -220,7 +227,7 @@ function App() {
       <div className="sidebar-user"><span className="user-initial">{user.role === 'admin' ? '관' : user.employeeName?.slice(-1) ?? '직'}</span><div><b>{user.role === 'admin' ? '관리자' : user.employeeName}</b><span>{user.username}</span></div><button title="로그아웃" aria-label="로그아웃" onClick={() => void logout()}><Icon name="logout"/></button></div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><div className="topbar-leading"><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'} title={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}><Icon name="menu" size={19}/></button><div className="breadcrumb"><span>왕궁농협 하나로마트</span><i>/</i><b>{pageTitle[page]}</b></div></div><div className="topbar-right"><span className="local-indicator"><i/>이 기기에 저장</span><button className="top-logout" onClick={() => void logout()}><Icon name="logout"/> 로그아웃</button></div></header>
+      <header className="topbar"><div className="topbar-leading"><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'} title={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}><Icon name="menu" size={19}/></button><div className="breadcrumb"><span>왕궁농협 하나로마트</span><i>/</i><b>{pageTitle[page]}</b></div></div><div className="topbar-right"><span className="local-indicator"><i/>이 기기에 저장</span><button className="top-change-password" onClick={() => { setError(''); setShowPasswordDialog(true) }}><Icon name="key" size={15}/> 비밀번호 변경</button><button className="top-logout" onClick={() => void logout()}><Icon name="logout"/> 로그아웃</button></div></header>
       <div className="page-content">
         {error && <div className="alert" role="alert"><span className="alert-mark">!</span><p>{error}</p><button onClick={() => setError('')}>확인</button></div>}
         {page === 'schedule' && <>
@@ -280,6 +287,7 @@ function App() {
     </main>
     {notice && <div className="toast-message"><Icon name="check" size={17}/>{notice}</div>}
     {showReference && isAdmin && <div className="modal-backdrop reference-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowReference(false) }}><section className="reference-viewer" role="dialog" aria-modal="true" aria-labelledby="reference-title"><header><div><h2 id="reference-title">수기 근무표 참고</h2><p>관리자 전용 · 업로드한 원본 이미지</p></div><button type="button" className="close-button" onClick={() => setShowReference(false)} aria-label="닫기">×</button></header><div className="reference-image-wrap"><img src="/api/reference-schedule" alt="왕궁농협 하나로마트 수기 근무표 참고 이미지"/></div></section></div>}
+    {showPasswordDialog && <PasswordDialog onClose={() => setShowPasswordDialog(false)} onSave={changePassword}/>}
     {dialog && isAdmin && <EmployeeDialog employee={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSave={saveEmployee} onDelete={deleteEmployee}/>}
     {accountDialog && isAdmin && <AccountDialog employee={accountDialog} account={accounts.find(item => item.employeeId === accountDialog.id)} onClose={() => setAccountDialog(null)} onSave={saveAccount}/>}
   </div>
@@ -320,6 +328,21 @@ function AccountDialog({ employee, account, onClose, onSave }: { employee: Emplo
   const [password, setPassword] = useState('')
   const submit = (event: FormEvent) => { event.preventDefault(); onSave(employee, username, password) }
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><form className="dialog-card account-dialog" onSubmit={submit}><header><div><h2>{employee.name}</h2></div><button type="button" className="close-button" onClick={onClose} aria-label="닫기">×</button></header><p className="dialog-note">직원은 이 계정으로 로그인해 근무표와 본인의 휴무 신청을 확인합니다.</p><label className="form-field">로그인 아이디<input required minLength={3} maxLength={32} value={username} onChange={e => setUsername(e.target.value)} placeholder="영문 또는 숫자 3자 이상"/></label><label className="form-field">{account ? '새 비밀번호 (변경할 때만 입력)' : '초기 비밀번호'}<input type="password" minLength={account ? 0 : 10} required={!account} value={password} onChange={e => setPassword(e.target.value)} placeholder={account ? '변경하지 않으면 비워 두세요' : '10자 이상'}/></label><footer><span className="dialog-note">비밀번호는 저장 후 다시 볼 수 없습니다.</span><div><button type="button" className="button button-quiet" onClick={onClose}>취소</button><button className="button button-primary">계정 저장</button></div></footer></form></div>
+}
+
+function PasswordDialog({ onClose, onSave }: { onClose: () => void; onSave: (currentPassword: string, newPassword: string) => Promise<void> }) {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [formError, setFormError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setFormError('')
+    if (newPassword !== confirmPassword) return setFormError('새 비밀번호 확인이 일치하지 않습니다.')
+    setBusy(true)
+    try { await onSave(currentPassword, newPassword) } finally { setBusy(false) }
+  }
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><form className="dialog-card" onSubmit={event => void submit(event)}><header><div><h2>비밀번호 변경</h2></div><button type="button" className="close-button" onClick={onClose} aria-label="닫기">×</button></header><p className="dialog-note">새 비밀번호는 10자 이상으로 설정해 주세요.</p><label className="form-field">현재 비밀번호<input autoFocus required type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)}/></label><label className="form-field">새 비밀번호<input required type="password" autoComplete="new-password" minLength={10} maxLength={128} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="10자 이상"/></label><label className="form-field">새 비밀번호 확인<input required type="password" autoComplete="new-password" minLength={10} maxLength={128} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} placeholder="새 비밀번호를 다시 입력"/></label>{formError && <div className="auth-error">{formError}</div>}<footer><span className="dialog-note">다른 로그인 기기에서는 다시 로그인해야 합니다.</span><div><button type="button" className="button button-quiet" onClick={onClose}>취소</button><button className="button button-primary" disabled={busy}>{busy ? '저장 중…' : '비밀번호 저장'}</button></div></footer></form></div>
 }
 
 export default App
