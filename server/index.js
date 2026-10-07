@@ -168,6 +168,11 @@ app.get('/api/employees', (req, res) => {
     : db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
 })
+app.get('/api/reference-schedule', requireAdmin, (_req, res) => {
+  const referencePath = path.join(dataDir, 'reference-schedule.png')
+  if (!existsSync(referencePath)) return res.status(404).json({ error: '등록된 참고 이미지가 없습니다.' })
+  res.type('png').sendFile(referencePath)
+})
 app.post('/api/employees', requireAdmin, (req, res) => {
   const { name, employmentType = '정규직', active = true, notes = '' } = req.body ?? {}
   if (!String(name ?? '').trim()) return res.status(400).json({ error: '직원명을 입력해 주세요.' })

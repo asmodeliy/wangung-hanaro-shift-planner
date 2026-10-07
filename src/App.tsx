@@ -68,6 +68,7 @@ function App() {
   const [chosenDates, setChosenDates] = useState<string[]>([])
   const [holidayDate, setHolidayDate] = useState('')
   const [accountDialog, setAccountDialog] = useState<Employee | null>(null)
+  const [showReference, setShowReference] = useState(false)
 
   useEffect(() => {
     void (async () => {
@@ -215,7 +216,7 @@ function App() {
       <div className="page-content">
         {error && <div className="alert" role="alert"><span className="alert-mark">!</span><p>{error}</p><button onClick={() => setError('')}>확인</button></div>}
         {page === 'schedule' && <>
-          <div className="page-heading"><div><h1>{isAdmin ? '월간 근무표' : `${user.employeeName ?? '내'} 근무 일정`}</h1><p>{isAdmin ? '희망휴무와 매장 운영 조건을 살펴보고 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'}</p></div><div className="heading-actions"><button className="button button-quiet print-action" onClick={() => window.print()}><Icon name="print"/> 인쇄</button>{isAdmin && <button className="button button-primary" onClick={() => void generate()}><Icon name="spark" size={16}/> 자동 편성</button>}</div></div>
+          <div className="page-heading"><div><h1>{isAdmin ? '월간 근무표' : `${user.employeeName ?? '내'} 근무 일정`}</h1><p>{isAdmin ? '희망휴무와 매장 운영 조건을 살펴보고 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'}</p></div><div className="heading-actions"><button className="button button-quiet print-action" onClick={() => window.print()}><Icon name="print"/> 인쇄</button>{isAdmin && <><button className="button button-quiet reference-open" onClick={() => setShowReference(true)}><Icon name="calendar" size={16}/> 수기 근무표</button><button className="button button-primary" onClick={() => void generate()}><Icon name="spark" size={16}/> 자동 편성</button></>}</div></div>
           <section className="schedule-workspace">
             <div className="schedule-toolbar"><div className="month-picker"><button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button><button className="today-button" onClick={() => setMonth(new Date(today.getFullYear(), today.getMonth(), 1))}>오늘</button></div><div className="schedule-meta"><span className="meta-pill"><Icon name="clock" size={15}/> 기준 휴무 <b>{restTarget}일</b></span>{isAdmin && <span className={`schedule-status ${confirmed ? 'is-confirmed' : ''}`}><i/>{confirmed ? '확정된 근무표' : '작성 중'}</span>}</div></div>
             {isAdmin && <div className="schedule-summary"><div><span>재직 직원</span><b>{activeEmployees.length}<small>명</small></b></div><div><span>배정 근무</span><b>{workCount}<small>건</small></b></div><div><span>휴무 신청</span><b>{requests.length}<small>건</small></b></div><div><span>확인 항목</span><b className={issues.length ? 'number-warn' : ''}>{issues.length}<small>건</small></b></div></div>}
@@ -270,6 +271,7 @@ function App() {
       </div>
     </main>
     {notice && <div className="toast-message"><Icon name="check" size={17}/>{notice}</div>}
+    {showReference && isAdmin && <div className="modal-backdrop reference-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowReference(false) }}><section className="reference-viewer" role="dialog" aria-modal="true" aria-labelledby="reference-title"><header><div><h2 id="reference-title">수기 근무표 참고</h2><p>관리자 전용 · 업로드한 원본 이미지</p></div><button type="button" className="close-button" onClick={() => setShowReference(false)} aria-label="닫기">×</button></header><div className="reference-image-wrap"><img src="/api/reference-schedule" alt="왕궁농협 하나로마트 수기 근무표 참고 이미지"/></div></section></div>}
     {dialog && isAdmin && <EmployeeDialog employee={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSave={saveEmployee} onDelete={deleteEmployee}/>}
     {accountDialog && isAdmin && <AccountDialog employee={accountDialog} account={accounts.find(item => item.employeeId === accountDialog.id)} onClose={() => setAccountDialog(null)} onSave={saveAccount}/>}
   </div>
