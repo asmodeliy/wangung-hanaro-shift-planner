@@ -125,7 +125,7 @@ function loadUser(req, _res, next) {
     const digest = createHash('sha256').update(token).digest('hex')
     const user = db.prepare(`SELECT u.id, u.username, u.role, u.employee_id, e.name AS employee_name
       FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN employees e ON e.id = u.employee_id
-      WHERE s.token_hash = ? AND s.expires_at > ?`).get(digest, Math.floor(Date.now() / 1000))
+      WHERE s.token_hash = ? AND s.expires_at > ? AND (u.role = 'admin' OR e.active = 1)`).get(digest, Math.floor(Date.now() / 1000))
     req.user = user ?? null
   }
   next()
