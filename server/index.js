@@ -173,6 +173,9 @@ app.get('/api/reference-schedule', requireAdmin, (_req, res) => {
   if (!existsSync(referencePath)) return res.status(404).json({ error: '등록된 참고 이미지가 없습니다.' })
   res.type('png').sendFile(referencePath)
 })
+app.get('/api/reference-schedule/status', requireAdmin, (_req, res) => {
+  res.json({ available: existsSync(path.join(dataDir, 'reference-schedule.png')) })
+})
 app.post('/api/employees', requireAdmin, (req, res) => {
   const { name, employmentType = '정규직', active = true, notes = '' } = req.body ?? {}
   if (!String(name ?? '').trim()) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
