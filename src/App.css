@@ -80,10 +80,10 @@
 .legend-tip { margin-left: auto; color: #9aa39a; text-align: right; }
 .schedule-scroll { overflow-x: auto; border-top: 1px solid #e8e9e1; scrollbar-color: #b7c2b6 #f0efe8; }
 .schedule-table { width: 100%; min-width: 1020px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
-.schedule-table th, .schedule-table td { height: 48px; padding: 0 3px; border-right: 1px solid #f0f0e9; border-bottom: 1px solid #eceee7; text-align: center; }
-.schedule-table thead th { height: 53px; color: #65766b; background: #fafaf5; font-size: 10px; font-weight: 600; }
+.schedule-table th, .schedule-table td { height: 36px; padding: 0 1px; border-right: 1px solid #f0f0e9; border-bottom: 1px solid #eceee7; text-align: center; }
+.schedule-table thead th { height: 42px; color: #65766b; background: #fafaf5; font-size: 8px; font-weight: 600; }
 .schedule-table thead th > span, .schedule-table thead th > b { display: block; }
-.schedule-table thead th > b { margin-top: 3px; color: #3f5145; font-size: 12px; font-variant-numeric: tabular-nums; }
+.schedule-table thead th > b { margin-top: 2px; color: #3f5145; font-size: 10px; font-variant-numeric: tabular-nums; }
 .schedule-table thead th.sunday, .schedule-table thead th.holiday-head { color: #b35545; background: #fbf2ed; }
 .schedule-table thead th.saturday { color: #4b7891; background: #f0f5f7; }
 .schedule-table .staff-col { position: sticky; left: 0; z-index: 4; width: 143px; padding-left: 15px; background: #fafaf5; text-align: left; }
@@ -100,7 +100,7 @@
 .schedule-table td.sunday-col, .schedule-table td.holiday-col { background: #fffaf7; }
 .schedule-table td.saturday-col { background: #f9fbfb; }
 .schedule-table td.warning-cell { background: #fff3ec; }
-.shift-chip { position: relative; display: inline-flex; min-width: 36px; height: 25px; align-items: center; justify-content: center; padding: 0 5px; border: 1px solid transparent; border-radius: 5px; font-size: 9px; font-weight: 700; transition: transform .12s ease, box-shadow .12s ease; }
+.shift-chip { position: relative; display: inline-flex; min-width: 25px; height: 18px; align-items: center; justify-content: center; padding: 0 1px; border: 1px solid transparent; border-radius: 3px; font-size: 7px; font-weight: 600; transition: transform .12s ease, box-shadow .12s ease; }
 .shift-chip:not(:disabled):hover { transform: scale(1.08); box-shadow: 0 2px 7px #213b261b; }
 .shift-chip:disabled { cursor: default; }
 .shift-open { color: #2a673e; background: #e7f1e5; }.shift-close { color: #8a6222; background: #f8efd8; }.shift-off { color: #737d74; background: #e9ece6; }.shift-empty { color: #adb5ab; background: transparent; }
@@ -203,6 +203,9 @@
   .schedule-table tbody .staff-cell { width: 118px; gap: 4px; padding-left: 6px; }
   .schedule-table tbody .staff-cell .staff-avatar { width: 23px; height: 23px; flex-basis: 23px; font-size: 9px; }
   .schedule-table tbody .staff-cell .staff-label b { font-size: 10px; letter-spacing: -.03em; }
+  .schedule-table .totals-cell { gap: 5px; font-size: 9px; }
+  .schedule-table .totals-cell > b { min-width: 11px; font-size: 10px; }
+  .schedule-table .totals-cell > span { gap: 2px; font-size: 8px; }
 }
 
 @media (max-width: 1120px) {
