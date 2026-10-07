@@ -30,7 +30,7 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json()
 }
 
-function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'settings' | 'logout' | 'arrow' | 'plus' | 'clock' | 'check' | 'print' | 'spark'; size?: number }) {
+function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'settings' | 'logout' | 'arrow' | 'plus' | 'clock' | 'check' | 'print' | 'spark' | 'menu'; size?: number }) {
   const paths: Record<typeof name, ReactNode> = {
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>,
     users: <><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></>,
@@ -39,7 +39,7 @@ function Icon({ name, size = 18 }: { name: 'calendar' | 'users' | 'heart' | 'set
     logout: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>, plus: <path d="M12 5v14M5 12h14"/>,
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
-    check: <path d="m5 12 4 4L19 6"/>, print: <><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7z"/></>, spark: <><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>,
+    check: <path d="m5 12 4 4L19 6"/>, print: <><path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7z"/></>, spark: <><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>, menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>,
   }
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>
 }
@@ -70,6 +70,13 @@ function App() {
   const [holidayDate, setHolidayDate] = useState('')
   const [accountDialog, setAccountDialog] = useState<Employee | null>(null)
   const [showReference, setShowReference] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('wangung-sidebar') !== 'expanded')
+
+  const toggleSidebar = () => setSidebarCollapsed(value => {
+    const next = !value
+    localStorage.setItem('wangung-sidebar', next ? 'collapsed' : 'expanded')
+    return next
+  })
 
   useEffect(() => {
     void (async () => {
@@ -204,7 +211,7 @@ function App() {
 
   const pageTitle: Record<Page, string> = { schedule: '월간 근무표', requests: '희망휴무', employees: '직원 관리', settings: '운영 설정' }
   const visiblePages: Page[] = isAdmin ? ['schedule', 'requests', 'employees', 'settings'] : ['schedule', 'requests']
-  return <div className={`app-shell ${isAdmin ? 'is-admin' : 'is-staff'}`}>
+  return <div className={`app-shell ${isAdmin ? 'is-admin' : 'is-staff'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <aside className="sidebar">
       <div className="brand"><BrandMark/><div><strong>왕궁농협</strong><span>하나로마트</span></div></div>
       <div className="nav-caption">근무 관리</div>
@@ -213,7 +220,7 @@ function App() {
       <div className="sidebar-user"><span className="user-initial">{user.role === 'admin' ? '관' : user.employeeName?.slice(-1) ?? '직'}</span><div><b>{user.role === 'admin' ? '관리자' : user.employeeName}</b><span>{user.username}</span></div><button title="로그아웃" aria-label="로그아웃" onClick={() => void logout()}><Icon name="logout"/></button></div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumb"><span>왕궁농협 하나로마트</span><i>/</i><b>{pageTitle[page]}</b></div><div className="topbar-right"><span className="local-indicator"><i/>이 기기에 저장</span><button className="top-logout" onClick={() => void logout()}><Icon name="logout"/> 로그아웃</button></div></header>
+      <header className="topbar"><div className="topbar-leading"><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'} title={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}><Icon name="menu" size={19}/></button><div className="breadcrumb"><span>왕궁농협 하나로마트</span><i>/</i><b>{pageTitle[page]}</b></div></div><div className="topbar-right"><span className="local-indicator"><i/>이 기기에 저장</span><button className="top-logout" onClick={() => void logout()}><Icon name="logout"/> 로그아웃</button></div></header>
       <div className="page-content">
         {error && <div className="alert" role="alert"><span className="alert-mark">!</span><p>{error}</p><button onClick={() => setError('')}>확인</button></div>}
         {page === 'schedule' && <>
@@ -228,7 +235,7 @@ function App() {
                 const rest = shifts.filter(s => s.employeeId === employee.id && s.code === 'off').length
                 const opens = shifts.filter(s => s.employeeId === employee.id && s.code === 'open').length
                 const closes = shifts.filter(s => s.employeeId === employee.id && s.code === 'close').length
-                return <tr key={employee.id} className={own ? 'own-row' : ''}><th className="staff-cell"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b>{isAdmin && <small>{employee.employmentType}</small>}</span></th>{Array.from({ length: dayCount }, (_, i) => {
+                return <tr key={employee.id} className={own ? 'own-row' : ''}><th className="staff-cell"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b></span></th>{Array.from({ length: dayCount }, (_, i) => {
                   const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const warning = issues.some(item => item.date === date); const hours = shift && shift.code !== 'off' ? (isAdmin ? settings.shiftTimes[shift.code][shift.employmentType === '계약직' ? 'contract' : 'regular'] : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null
                   return <td key={i} className={`${d.getDay() === 0 ? 'sunday-col' : ''} ${d.getDay() === 6 ? 'saturday-col' : ''} ${holidayMap.has(date) ? 'holiday-col' : ''} ${warning ? 'warning-cell' : ''}`}><button disabled={!isAdmin} className={`shift-chip ${shift?.code ? `shift-${shift.code}` : 'shift-empty'} ${request ? 'has-request' : ''}`} title={`${shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '미정'}${hours ? ` · ${hours.start}–${hours.end}` : ''}${request ? ' · 희망휴무 신청' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '·'}{request && <i/>}</button></td>
                 })}<td className="totals-cell"><b>{rest}</b><span><i className="total-open-dot"/>{opens}</span><span><i className="total-close-dot"/>{closes}</span></td></tr>
