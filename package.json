@@ -16,6 +16,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vercel/functions": "^3.9.11",
     "antd": "^6.6.5",
     "better-sqlite3": "^12.2.0",
     "date-holidays": "^3.37.0",

@@ -68,6 +68,7 @@ function BrandMark() {
 function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [setupNeeded, setSetupNeeded] = useState(false)
+  const [setupKeyRequired, setSetupKeyRequired] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [page, setPage] = useState<Page>('schedule')
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
@@ -110,8 +111,9 @@ function App() {
   useEffect(() => {
     void (async () => {
       try {
-        const status = await api<{ setupNeeded: boolean }>('/api/auth/status')
+        const status = await api<{ setupNeeded: boolean; setupKeyRequired?: boolean }>('/api/auth/status')
         setSetupNeeded(status.setupNeeded)
+        setSetupKeyRequired(Boolean(status.setupKeyRequired))
         if (!status.setupNeeded) {
           const result = await api<{ user: User }>('/api/auth/me')
           setUser(result.user)
@@ -169,8 +171,8 @@ function App() {
   const toast = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
   const changeMonth = (delta: number) => { setMonth(current => new Date(current.getFullYear(), current.getMonth() + delta, 1)); setWeekIndex(0) }
   const goToToday = () => { setMonth(new Date(today.getFullYear(), today.getMonth(), 1)); setWeekIndex(Math.floor((today.getDate() - 1 + (new Date(today.getFullYear(), today.getMonth(), 1).getDay() + 6) % 7) / 7)) }
-  const authenticate = async (username: string, password: string, setup: boolean) => {
-    const result = await api<{ user: User }>(setup ? '/api/auth/setup' : '/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  const authenticate = async (username: string, password: string, setup: boolean, setupKey: string) => {
+    const result = await api<{ user: User }>(setup ? '/api/auth/setup' : '/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, setupKey }) })
     setUser(result.user); setSetupNeeded(false); setPage('schedule'); setError('')
   }
   const logout = async () => { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null); setEmployees([]); setShifts([]); setRequests([]) } }
@@ -299,7 +301,7 @@ function App() {
   }
 
   if (!authChecked) return <div className="boot-screen"><BrandMark/><span>왕궁농협 하나로마트</span><i/></div>
-  if (!user) return <AuthScreen setup={setupNeeded} error={error} onSubmit={authenticate}/>
+  if (!user) return <AuthScreen setup={setupNeeded} setupKeyRequired={setupKeyRequired} error={error} onSubmit={authenticate}/>
 
   const pageTitle: Record<Page, string> = { schedule: '월간 근무표', requests: '희망휴무', employees: '직원 관리', settings: '운영 설정' }
   const visiblePages: Page[] = isAdmin ? ['schedule', 'requests', 'employees', 'settings'] : ['schedule', 'requests']
@@ -404,9 +406,10 @@ function App() {
   </div>
 }
 
-function AuthScreen({ setup, error, onSubmit }: { setup: boolean; error: string; onSubmit: (username: string, password: string, setup: boolean) => Promise<void> }) {
+function AuthScreen({ setup, setupKeyRequired, error, onSubmit }: { setup: boolean; setupKeyRequired: boolean; error: string; onSubmit: (username: string, password: string, setup: boolean, setupKey: string) => Promise<void> }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [setupKey, setSetupKey] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
@@ -414,9 +417,9 @@ function AuthScreen({ setup, error, onSubmit }: { setup: boolean; error: string;
     event.preventDefault(); setFormError('')
     if (setup && password !== confirm) return setFormError('비밀번호 확인이 일치하지 않습니다.')
     setBusy(true)
-    try { await onSubmit(username, password, setup) } catch (e) { setFormError(e instanceof Error ? e.message : '로그인하지 못했습니다.') } finally { setBusy(false) }
+    try { await onSubmit(username, password, setup, setupKey) } catch (e) { setFormError(e instanceof Error ? e.message : '로그인하지 못했습니다.') } finally { setBusy(false) }
   }
-  return <main className="auth-screen"><div className="auth-landscape" aria-hidden="true"><span/><i/><b/></div><section className="auth-card"><BrandMark/><h1>{setup ? '관리자 계정 만들기' : '근무표에 로그인'}</h1><p className="auth-description">{setup ? '처음 한 번, 관리자 아이디와 비밀번호를 설정해 주세요.' : '왕궁농협 하나로마트 근무 관리'}</p><form onSubmit={submit}><label>아이디<input required autoComplete="username" minLength={3} maxLength={32} value={username} onChange={e => setUsername(e.target.value)} placeholder="사용할 아이디"/></label><label>비밀번호<input required type="password" autoComplete={setup ? 'new-password' : 'current-password'} minLength={setup ? 10 : 1} value={password} onChange={e => setPassword(e.target.value)} placeholder={setup ? '10자 이상' : '비밀번호 입력'}/></label>{setup && <label>비밀번호 확인<input required type="password" autoComplete="new-password" minLength={10} value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="비밀번호를 다시 입력"/></label>}{(formError || error) && <div className="auth-error">{formError || error}</div>}<button className="button button-primary auth-submit" disabled={busy}>{busy ? '확인 중…' : setup ? '관리자 계정 생성' : '로그인'}<Icon name="arrow"/></button></form><p className="auth-footnote">계정과 근무 정보는 안전한 서버에 저장됩니다.</p></section><footer className="auth-footer">왕궁농협 하나로마트 <span>·</span> 직원 근무 관리</footer></main>
+  return <main className="auth-screen"><div className="auth-landscape" aria-hidden="true"><span/><i/><b/></div><section className="auth-card"><BrandMark/><h1>{setup ? '관리자 계정 만들기' : '근무표에 로그인'}</h1><p className="auth-description">{setup ? '처음 한 번, 관리자 아이디와 비밀번호를 설정해 주세요.' : '왕궁농협 하나로마트 근무 관리'}</p><form onSubmit={submit}>{setup && setupKeyRequired && <label>최초 관리자 설정 키<input required autoComplete="off" type="password" value={setupKey} onChange={e => setSetupKey(e.target.value)} placeholder="배포 담당자가 전달한 설정 키"/></label>}<label>아이디<input required autoComplete="username" minLength={3} maxLength={32} value={username} onChange={e => setUsername(e.target.value)} placeholder="사용할 아이디"/></label><label>비밀번호<input required type="password" autoComplete={setup ? 'new-password' : 'current-password'} minLength={setup ? 10 : 1} value={password} onChange={e => setPassword(e.target.value)} placeholder={setup ? '10자 이상' : '비밀번호 입력'}/></label>{setup && <label>비밀번호 확인<input required type="password" autoComplete="new-password" minLength={10} value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="비밀번호를 다시 입력"/></label>}{(formError || error) && <div className="auth-error">{formError || error}</div>}<button className="button button-primary auth-submit" disabled={busy}>{busy ? '확인 중…' : setup ? '관리자 계정 생성' : '로그인'}<Icon name="arrow"/></button></form><p className="auth-footnote">계정과 근무 정보는 안전한 서버에 저장됩니다.</p></section><footer className="auth-footer">왕궁농협 하나로마트 <span>·</span> 직원 근무 관리</footer></main>
 }
 
 function PairAdder({ employees, onAdd, existing }: { employees: Employee[]; onAdd: (pair: number[]) => void; existing: { employeeIds: number[] }[] }) {
