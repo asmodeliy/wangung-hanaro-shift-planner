@@ -70,19 +70,21 @@ test('fill mode retains every prior work and rest assignment', async () => {
   verify(input, result)
   for (const prior of existingShifts) assert.deepEqual(result.shifts.find(s => s.employeeId === prior.employeeId && s.date === prior.date), prior)
 })
-test('agricultural staff cover an open shift daily and split open/close when at least two work', async () => {
+test('agricultural staff require an open shift but do not require a close shift', async () => {
   const input = base()
   input.employees[3].isAgricultural = true
   input.employees[4].isAgricultural = true
+  input.employees[3].workRules.allowedShifts = ['open']
+  input.employees[4].workRules.allowedShifts = ['open']
   const result = await generateSchedule(input)
   verify(input, result)
   for (const date of monthDates(input.month)) {
     const assigned = result.shifts.filter(shift => shift.date === date && input.employees.find(employee => employee.id === shift.employeeId)?.isAgricultural && shift.code !== 'off')
     assert.ok(assigned.some(shift => shift.code === 'open'), `${date} needs an agricultural opener`)
-    if (assigned.length >= 2) assert.ok(assigned.some(shift => shift.code === 'close'), `${date} needs an agricultural closer when at least two work`)
+    assert.ok(assigned.every(shift => shift.code === 'open'), `${date} must allow agricultural staff to work open only`)
   }
 })
-test('manual validation identifies missing agricultural open and closer coverage', () => {
+test('manual validation identifies missing agricultural open but allows no agricultural closer', () => {
   const input = base()
   input.employees[3].isAgricultural = true
   input.employees[4].isAgricultural = true
@@ -91,7 +93,7 @@ test('manual validation identifies missing agricultural open and closer coverage
   const issues = validateSchedule({ ...input, shifts }).issues
   assert.ok(issues.some(issue => issue.text === `${date} 농산 직원 오픈 근무 없음`))
   const onlyOpen = validateSchedule({ ...input, shifts: shifts.map(shift => ({ ...shift, code: 'open' })) }).issues
-  assert.ok(onlyOpen.some(issue => issue.text === `${date} 농산 직원 2명 이상 근무 시 마감 근무 없음`))
+  assert.ok(!onlyOpen.some(issue => issue.text.includes('농산 직원') && issue.text.includes('마감')))
 })
 test('regular staff do not close on consecutive days from November 2026 onward', async () => {
   const input = base()

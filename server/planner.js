@@ -60,7 +60,6 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     const agriculturalWorking = agriculturalEmployees.filter(employee => workingCodes.includes(entries.get(`${employee.id}:${date}`)))
     if (agriculturalEmployees.length > 0) {
       if (!agriculturalWorking.some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'open'))) issues.push({ date, text: `${date} 농산 직원 오픈 근무 없음` })
-      if (agriculturalWorking.length >= 2 && !agriculturalWorking.some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'close'))) issues.push({ date, text: `${date} 농산 직원 2명 이상 근무 시 마감 근무 없음` })
     }
     const fallback = fallbackMinimumWorkersForDate(date, holidays)
     if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
@@ -186,12 +185,6 @@ export async function generateSchedule(input) {
       lo([
         ...agriculturalEmployees.map(employee => variable(employee.id, date, 'open')),
         ...agriculturalEmployees.map(employee => variable(employee.id, date, 'full')),
-      ], 1)
-      // If two or more agricultural employees work, at least one must be on close.
-      up([
-        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'open')),
-        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'close', 1 - agriculturalEmployees.length)),
-        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'full', 1 - agriculturalEmployees.length)),
       ], 1)
     }
     const shiftImbalance = `open_close_imbalance_${dayKey}`
