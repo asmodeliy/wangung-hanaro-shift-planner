@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "app": "node scripts/app.js",
+    "test": "node --test server/*.test.js",
     "dev": "vite",
     "server": "node server/index.js",
     "start": "node server/index.js",
@@ -15,6 +17,7 @@
     "better-sqlite3": "^12.2.0",
     "date-holidays": "^3.37.0",
     "express": "^5.1.0",
+    "glpk.js": "^5.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
