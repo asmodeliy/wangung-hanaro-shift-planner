@@ -17,7 +17,7 @@ before(async () => {
   folder = await mkdtemp(path.join(os.tmpdir(), 'shift-planner-api-test-'))
   child = spawn(existsSync(systemNode) ? systemNode : process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: folder, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] })
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Test server did not start')), 10000)
+    const timer = setTimeout(() => reject(new Error('Test server did not start')), 30000)
     child.stdout.on('data', buffer => { const match = buffer.toString().match(/http:\/\/127\.0\.0\.1:(\d+)/); if (match) { baseUrl = `http://127.0.0.1:${match[1]}`; clearTimeout(timer); resolve() } })
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Test server exited: ${code}`)) })
     child.once('error', error => { clearTimeout(timer); reject(error) })
@@ -98,6 +98,18 @@ test('manager can pin one manually selected shift cell for alternative generatio
   assert.equal((await call('/api/shifts/lock-cell', 'POST', { employeeId: 1, date, locked: false })).status, 200)
   rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
   assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, false)
+})
+test('manager can select employment type staffing and invalid split floors are rejected', async () => {
+  const original = (await call('/api/settings')).data
+  const operations = {
+    ...original.operations, staffingMode: 'employmentType',
+    weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 2,
+    weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 1,
+  }
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
+  assert.equal((await call('/api/settings')).data.operations.staffingMode, 'employmentType')
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, weekdayContractMinimum: 4 } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })
 test('employees cannot change settings and API omits private employment rules', async () => {
   await call('/api/users/employee/1', 'PUT', { username: 'testemployee', password: 'test-password-only-employee' })

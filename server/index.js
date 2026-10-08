@@ -498,16 +498,19 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
   if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
   if (incoming.operations !== undefined) {
-    const operations = incoming.operations
+    const operations = { ...settings.operations, ...(incoming.operations ?? {}) }
     const ranges = {
       weekdayTarget: [1, 20], weekendTarget: [1, 20], weekdayMinimum: [1, 20], weekendMinimum: [1, 20],
+      weekdayRegularTarget: [0, 20], weekdayRegularMinimum: [0, 20], weekdayContractTarget: [0, 20], weekdayContractMinimum: [0, 20],
+      weekendRegularTarget: [0, 20], weekendRegularMinimum: [0, 20], weekendContractTarget: [0, 20], weekendContractMinimum: [0, 20],
       functionalMinOnDuty: [0, 9], supportMaxOff: [0, 9], produceOpenCount: [0, 9],
       maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 9], requestDueDay: [1, 28], publishDay: [1, 28],
     }
-    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean') return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
     for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(operations[key]) || operations[key] < min || operations[key] > max) return res.status(400).json({ error: '운영 기준의 인원 수와 날짜를 확인해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), requireRegularEachShift: operations.requireRegularEachShift }
+    for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, requireRegularEachShift: operations.requireRegularEachShift }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()

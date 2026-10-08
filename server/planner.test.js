@@ -100,6 +100,26 @@ test('weekday and holiday targets are five and four, with fallback-only staffing
   assert.equal(result.shifts.filter(shift => shift.date === fixedDay && ['open', 'close'].includes(shift.code)).length, 4)
   assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues.filter(issue => issue.date === fixedDay && issue.text.includes('최소 근무인원 미충족')).map(issue => issue.text), [])
 })
+test('employment type staffing mode applies separate targets, floors, validation and generation', async () => {
+  const operations = {
+    ...base().settings.operations, staffingMode: 'employmentType',
+    weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 2,
+    weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 1,
+  }
+  assert.equal(minimumWorkersForDate('2026-02-02', [], operations), 5)
+  assert.equal(fallbackMinimumWorkersForDate('2026-02-02', [], operations), 3)
+  const date = '2026-02-02'
+  const underContract = employees.map(employee => ({ employeeId: employee.id, date, code: employee.id <= 3 ? 'open' : employee.id === 4 ? 'close' : 'off' }))
+  const validation = validateSchedule({ ...base(), settings: { ...base().settings, operations }, shifts: underContract })
+  assert.ok(validation.issues.some(issue => issue.text.includes(`${date} 계약직 최소 인원 미충족`)))
+  const input = { ...base(), settings: { ...base().settings, operations } }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  const day = result.shifts.filter(shift => shift.date === date && ['open', 'close'].includes(shift.code))
+  assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '정규직').length >= 1)
+  assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '계약직').length >= 2)
+  assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues, [])
+})
 test('October staffing never drops below the relaxed threshold when three people can cover a fixed Sunday', async () => {
   const fixedDay = '2026-10-17'
   const existingShifts = employees.map(employee => ({ employeeId: employee.id, date: fixedDay, code: employee.id === 1 || employee.id === 3 || employee.id === 4 || employee.id === 5 ? 'off' : employee.id === 6 ? 'open' : 'close', locked: true }))

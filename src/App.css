@@ -342,6 +342,8 @@
 .schedule-table .totals-content > span { font-size: 9px; }
 .rest-comparison { color: #66786c; font-size: 10px; }
 .operations-settings { grid-column: 1 / -1; }
+.rule-mode { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; color: #50675a; font-size: 12px; font-weight: 700; }
+.rule-mode select { min-height: 38px; padding: 0 34px 0 11px; border: 1px solid #dce7de; border-radius: 7px; color: #183d2a; background: #fbfdfb; font-size: 13px; }
 .rule-number-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .rule-number { display: grid; gap: 6px; color: #50675a; font-size: 11px; font-weight: 650; }
 .rule-number input { width: 100%; min-width: 0; height: 41px; padding: 0 11px; border: 1px solid #dce7de; border-radius: 7px; color: #183d2a; background: #fbfdfb; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
