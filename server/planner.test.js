@@ -236,3 +236,10 @@ test('agricultural backup opener is only accepted when no agricultural employee 
   issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
   assert.ok(issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
 })
+test('agricultural coverage requires an opener only, without a closer requirement', () => {
+  const input = { ...base(), employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 4 || employee.id === 5 })) }
+  const date = '2026-02-02'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 || employee.id === 5 ? 'open' : 'close' }))
+  const agriculturalIssues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date && issue.text.includes('농산'))
+  assert.equal(agriculturalIssues.length, 0)
+})

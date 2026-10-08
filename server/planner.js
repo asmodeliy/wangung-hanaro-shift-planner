@@ -106,7 +106,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     const supportOff = supportEmployees.filter(employee => entries.get(`${employee.id}:${date}`) === 'off').length
     const produceOpen = produceEmployees.filter(employee => covers(entries.get(`${employee.id}:${date}`), 'open')).length
     const backupOpen = produceBackups.filter(employee => covers(entries.get(`${employee.id}:${date}`), 'open')).length
-    if ((produceEmployees.length || produceBackups.length) && produceOpen + backupOpen === 0) issues.push({ date, text: `${date} 농산 담당자 또는 대직자 오픈 근무 없음` })
+    if ((produceEmployees.length || produceBackups.length) && !(settings.produceOpenExceptions ?? []).includes(date) && produceOpen + backupOpen === 0) issues.push({ date, text: `${date} 농산 담당자 또는 대직자 오픈 근무 없음` })
     if (produceOpen > 0 && backupOpen > 0) issues.push({ date, text: `${date} 농산 담당자가 오픈하므로 농산 대직자 오픈은 불필요` })
     if (rules.functionalMinOnDuty > 0 && functionalEmployees.length >= rules.functionalMinOnDuty && functionalOn < rules.functionalMinOnDuty) issues.push({ date, text: `${date} 일반직 출근 부족 (${functionalOn}명 / 필요 ${rules.functionalMinOnDuty}명)` })
     if (supportEmployees.length > 0 && supportOff > rules.supportMaxOff) issues.push({ date, text: `${date} 계약직 휴무 초과 (${supportOff}명 / 최대 ${rules.supportMaxOff}명)` })
@@ -195,13 +195,15 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
       cells.set(`${employee.id}:${date}`, code)
       if (code === 'open') opens++; else closes++
     }
-    const hasProduceOpener = produceEmployees.some(employee => hasShift(employee, 'open'))
-    const backupOpeners = produceBackups.filter(employee => hasShift(employee, 'open'))
-    if (hasProduceOpener) {
-      for (const backup of backupOpeners) if (!fixed.has(`${backup.id}:${date}`)) cells.set(`${backup.id}:${date}`, 'close')
-    } else if (!backupOpeners.length) {
-      const backup = workers.find(employee => employee.produceBackup && !fixed.has(`${employee.id}:${date}`))
-      if (backup) cells.set(`${backup.id}:${date}`, 'open')
+    if (!(settings.produceOpenExceptions ?? []).includes(date)) {
+      const hasProduceOpener = produceEmployees.some(employee => hasShift(employee, 'open'))
+      const backupOpeners = produceBackups.filter(employee => hasShift(employee, 'open'))
+      if (hasProduceOpener) {
+        for (const backup of backupOpeners) if (!fixed.has(`${backup.id}:${date}`)) cells.set(`${backup.id}:${date}`, 'close')
+      } else if (!backupOpeners.length) {
+        const backup = workers.find(employee => employee.produceBackup && !fixed.has(`${employee.id}:${date}`))
+        if (backup) cells.set(`${backup.id}:${date}`, 'open')
+      }
     }
   }
   return employees.flatMap(employee => dates.map(date => ({ employeeId: employee.id, date, code: cells.get(`${employee.id}:${date}`) ?? 'open' })))
@@ -362,7 +364,7 @@ export async function generateSchedule(input) {
       lo(employees.flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), 1)
       if (rules.requireRegularEachShift) lo([...employees.filter(e => e.employmentType === '정규직').flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), { name: slack, coef: 1 }], 1)
     }
-    if (produceEmployees.length || produceBackups.length) {
+    if ((produceEmployees.length || produceBackups.length) && !(settings.produceOpenExceptions ?? []).includes(date)) {
       const produceOpeners = produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')])
       const backupOpeners = produceBackups.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')])
       lo([...produceOpeners, ...backupOpeners], 1)
