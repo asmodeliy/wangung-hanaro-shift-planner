@@ -34,6 +34,13 @@ test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-02-30', code: 'off' })).status, 400)
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
 })
+test('holiday endpoint includes stored custom holidays', async () => {
+  const settings = (await call('/api/settings')).data
+  assert.equal((await call('/api/settings', 'PUT', { ...settings, additionalHolidays: ['2026-12-31'] })).status, 200)
+  const response = await call('/api/holidays?year=2026')
+  assert.equal(response.status, 200)
+  assert.ok(response.data.some(holiday => holiday.date === '2026-12-31' && holiday.name === '추가 공휴일'))
+})
 test('manual assignments below three workers are saved and reported as a validation issue', async () => {
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })).status, 200)

@@ -516,10 +516,10 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   res.json(settings)
 })
 
-app.get('/api/holidays', (req, res) => {
+app.get('/api/holidays', async (req, res) => {
   const year = Number(req.query.year)
   if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: '연도를 확인해 주세요.' })
-  res.json(holidaysFor(year))
+  res.json(holidaysFor(year, await readSettings()))
 })
 app.get('/api/shifts', async (req, res) => {
   const month = String(req.query.month ?? '')
