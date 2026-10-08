@@ -71,6 +71,10 @@ Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다.
 
 ## 클라우드 호스팅
 
-호스팅 목표는 Vercel과 PostgreSQL(Neon)입니다. 현재 서버는 동기식 `better-sqlite3`와 로컬 파일에 의존하므로 아직 Vercel에 배포할 수 없습니다. 배포 전 API의 데이터 접근을 비동기 PostgreSQL로 이전하고, `deployment/shift-planner.sqlite`의 설정과 근무표를 Neon으로 가져와야 합니다. Vercel 함수의 파일 저장소는 영구 운영 DB로 사용할 수 없습니다. [Vercel 저장소 안내](https://vercel.com/docs/storage), [Vercel Postgres 연동 안내](https://vercel.com/docs/postgres).
+Vercel 프로젝트 `wangung-hanaro-shift-planner`와 싱가포르 리전의 Neon 데이터베이스를 연결했습니다. 배포 시작용 SQLite의 직원 7명, 근무 161건, 운영 설정을 Neon으로 한 번 가져왔으며 사용자 계정과 세션은 비어 있습니다. Neon 연결 환경변수는 Vercel의 Production, Preview, Development 환경에 등록되어 있습니다.
 
-Vercel과 Neon 계정은 이 작업 환경에 연결되어 있지 않아 프로젝트 생성·환경 변수 설정·실제 배포가 아직 진행되지 않았습니다. 앱 배포 뒤에는 최초 관리자 계정을 만들고, **운영 설정 → 관리자 계정**에서 두 번째 관리자를 추가해야 합니다.
+현재 Express API는 동기식 `better-sqlite3`와 로컬 파일을 사용하므로 Vercel에 배포할 준비가 끝나지 않았습니다. 배포 전 API 데이터 접근을 비동기 PostgreSQL로 바꾸고 최초 관리자 계정 설정 흐름을 서버리스 환경에 맞춰야 합니다. Vercel 함수의 로컬 파일은 영구 데이터 저장소로 사용할 수 없습니다. [Vercel 저장소 안내](https://vercel.com/docs/storage), [Neon 연동 안내](https://neon.tech/docs/guides/vercel-native-integration).
+
+새 Neon 데이터베이스에 초기 데이터를 가져올 때는 Vercel CLI로 로그인·프로젝트 연결 후 `npx vercel env pull .env.development.local`을 실행하고 `npm run db:migrate:neon`을 실행합니다. 이 스크립트는 대상 DB에 운영 데이터가 있으면 덮어쓰지 않고 중단합니다. `.env.development.local`에는 DB 비밀값이 있으므로 Git에 추가하지 마세요.
+
+배포 후에는 관리자가 최초 계정을 만들고, **운영 설정 → 관리자 계정**에서 두 번째 관리자를 추가해야 합니다.

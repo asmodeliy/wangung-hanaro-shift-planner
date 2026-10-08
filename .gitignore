@@ -10,3 +10,8 @@ work/
 .vibe/config.local.json
 .impeccable/review/
 .impeccable/mocks/
+.vercel/
+.agents/
+.claude/
+skills-lock.json
+.env*

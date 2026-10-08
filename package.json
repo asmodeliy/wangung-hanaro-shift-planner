@@ -10,6 +10,7 @@
     "dev": "vite",
     "server": "node server/index.js",
     "start": "node server/index.js",
+    "db:migrate:neon": "node --env-file=.env.development.local scripts/migrate-neon.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
@@ -20,6 +21,7 @@
     "date-holidays": "^3.37.0",
     "express": "^5.1.0",
     "glpk.js": "^5.0.0",
+    "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
