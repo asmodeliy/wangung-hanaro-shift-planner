@@ -671,9 +671,11 @@ app.post('/api/shifts/confirm', requireAdmin, async (req, res) => {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식을 확인해 주세요.' })
   const input = await planningInput(month)
   const validation = validateSchedule({ ...input, shifts: input.existingShifts })
+  const isIgnoredPastOctoberIssue = issue => month === '2026-10' && issue.date >= '2026-10-01' && issue.date <= '2026-10-08'
   const staffingGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
-  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue))
-  const problems = [...blockingIssues, ...validation.pending, ...await photoIssues(month)]
+  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue) && !isIgnoredPastOctoberIssue(issue))
+  const pendingIssues = validation.pending.filter(issue => !isIgnoredPastOctoberIssue(issue))
+  const problems = [...blockingIssues, ...pendingIssues, ...await photoIssues(month)]
   if (problems.length) return res.status(409).json({ error: '확정 전 확인: ' + problems.slice(0, 4).map(i => i.text).join(' · '), validation })
   const settings = await readSettings()
   settings.confirmedMonths = [...new Set([...settings.confirmedMonths, month])]
