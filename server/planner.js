@@ -332,7 +332,7 @@ export async function generateSchedule(input) {
       ruleViolationSlacks.push({ name: overlap, coef: 1 })
     }
   }
-  const timeLimit = input.alternativeSearch ? 2 : 12
+  const timeLimit = 12
   const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'staffing_floors_then_rule_violations', vars: [...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...dailyStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...ruleViolationSlacks.map(item => ({ ...item, coef: 10_000 })), ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: 100 })), ...regularStaffingSlacks.map(item => ({ ...item, coef: 100 })), ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 })), ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 }))] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: timeLimit, mipgap: 0 })
   if (![glpk.GLP_OPT, glpk.GLP_FEAS].includes(staffingSolution.result.status)) {
     const shifts = fallbackAssignments({ month, employees, settings, holidays, existingShifts, lockedThroughDate, mode, seed: input.seed })
@@ -383,7 +383,7 @@ export async function generateSchedule(input) {
       lp.objective.vars.push({ name: worksDuringGap, coef: 1_000_000 })
     }
   }
-  const optimizedSolution = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: input.alternativeSearch ? 2 : 10, mipgap: 0 })
+  const optimizedSolution = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: 10, mipgap: 0 })
   const optimal = optimizedSolution.result.status === glpk.GLP_OPT
   const solution = optimal ? optimizedSolution : staffingSolution
   const shifts = employees.flatMap(employee => dates.map(date => ({ employeeId: employee.id, date, code: codes.find(code => solution.result.vars[variable(employee.id, date, code).name] > 0.5) })))

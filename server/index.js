@@ -638,9 +638,11 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const input = { ...planningInput(month), mode, lockedThroughDate: seoulDateKey(), alternativeSearch: true }
     const options = []
     const seen = new Set()
-    for (let attempt = 0; attempt < 8 && options.length < 5; attempt++) {
-      const result = await solveInWorker({ ...input, seed: 7717 + attempt * 104729 }, 9_000)
-      if (result.error) return res.status(422).json({ error: result.error })
+    const results = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + attempt * 104729 }, 55_000)))
+    const explored = results.length
+    for (const attempt of results) {
+      if (attempt.status !== 'fulfilled' || attempt.value.error) continue
+      const result = attempt.value
       const hardIssues = validateSchedule({ ...input, shifts: result.shifts }).issues.filter(issue => issue.text.includes('미편성'))
       if (hardIssues.length) continue
       const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
@@ -650,7 +652,7 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     }
     if (revision !== dataRevision) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
     if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
-    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored: 8, revision })
+    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored, revision })
   } catch (error) { next(error) }
   finally { generating = false }
 })

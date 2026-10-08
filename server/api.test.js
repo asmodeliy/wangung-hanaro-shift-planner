@@ -50,6 +50,13 @@ test('settings cannot mark an invalid schedule confirmed', async () => {
   assert.deepEqual(settings.data.confirmedMonths, [])
   assert.equal((await call('/api/shifts/confirm', 'POST', { month: '2026-10' })).status, 409)
 })
+test('manager can save date-level produce open exceptions', async () => {
+  const settings = (await call('/api/settings')).data
+  const date = '2026-11-19'
+  assert.equal((await call('/api/settings', 'PUT', { ...settings, produceOpenExceptions: [date] })).status, 200)
+  assert.ok((await call('/api/settings')).data.produceOpenExceptions.includes(date))
+  assert.equal((await call('/api/settings', 'PUT', { ...settings, produceOpenExceptions: ['2026-11-31'] })).status, 400)
+})
 test('generation with fewer than three active staff preserves existing assignments', async () => {
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)
   await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })
@@ -74,6 +81,16 @@ test('locking existing shifts protects filled cells while allowing blank cells t
   assert.match(protectedEdit.data.error, /확정되어 수정할 수 없습니다/)
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 2, date, code: 'close' })).status, 200)
   assert.equal((await call('/api/shifts/generate', 'POST', { month, mode: 'replace' })).status, 409)
+})
+test('manager can pin one manually selected shift cell for alternative generation', async () => {
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(Date.now() + 35 * 86400000)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })).status, 200)
+  assert.equal((await call('/api/shifts/lock-cell', 'POST', { employeeId: 1, date, locked: true })).status, 200)
+  let rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
+  assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, true)
+  assert.equal((await call('/api/shifts/lock-cell', 'POST', { employeeId: 1, date, locked: false })).status, 200)
+  rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
+  assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, false)
 })
 test('employees cannot change settings and API omits private employment rules', async () => {
   await call('/api/users/employee/1', 'PUT', { username: 'testemployee', password: 'test-password-only-employee' })
