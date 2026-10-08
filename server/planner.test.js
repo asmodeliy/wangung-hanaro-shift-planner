@@ -15,6 +15,23 @@ test('baseline covers both regular shifts, exact monthly quota and weekly minimu
   const input = base()
   verify(input, await generateSchedule(input))
 })
+test('a regular full-day assignment covers both regular open and close requirements', () => {
+  const input = base()
+  const date = '2026-02-05'
+  const shifts = [{ employeeId: 1, date, code: 'full' }, { employeeId: 4, date, code: 'open' }, { employeeId: 5, date, code: 'close' }]
+  const result = validateSchedule({ ...input, shifts })
+  assert.ok(!result.issues.some(issue => issue.date === date && issue.text.endsWith('정규직 없음')))
+  assert.ok(!result.issues.some(issue => issue.text.startsWith(`${date} 최소 근무인원 미충족`)))
+})
+test('fill generation preserves a manually assigned full-day shift', async () => {
+  const input = base()
+  const fullDay = { employeeId: 1, date: '2026-02-05', code: 'full' }
+  input.mode = 'fill'
+  input.existingShifts = [fullDay]
+  const result = await generateSchedule(input)
+  verify(input, result)
+  assert.ok(result.shifts.some(shift => shift.employeeId === fullDay.employeeId && shift.date === fullDay.date && shift.code === 'full'))
+})
 test('conflicting approved wishes are adjusted without breaking simultaneous-rest rule', async () => {
   const input = { ...base(), requests: [2, 7].map(employeeId => ({ employeeId, date: '2026-02-05', status: 'approved' })) }
   const result = await generateSchedule(input)
@@ -52,6 +69,55 @@ test('fill mode retains every prior work and rest assignment', async () => {
   const result = await generateSchedule({ ...input, mode: 'fill', existingShifts })
   verify(input, result)
   for (const prior of existingShifts) assert.deepEqual(result.shifts.find(s => s.employeeId === prior.employeeId && s.date === prior.date), prior)
+})
+test('agricultural staff cover an open shift daily and split open/close when at least two work', async () => {
+  const input = base()
+  input.employees[3].isAgricultural = true
+  input.employees[4].isAgricultural = true
+  const result = await generateSchedule(input)
+  verify(input, result)
+  for (const date of monthDates(input.month)) {
+    const assigned = result.shifts.filter(shift => shift.date === date && input.employees.find(employee => employee.id === shift.employeeId)?.isAgricultural && shift.code !== 'off')
+    assert.ok(assigned.some(shift => shift.code === 'open'), `${date} needs an agricultural opener`)
+    if (assigned.length >= 2) assert.ok(assigned.some(shift => shift.code === 'close'), `${date} needs an agricultural closer when at least two work`)
+  }
+})
+test('manual validation identifies missing agricultural open and closer coverage', () => {
+  const input = base()
+  input.employees[3].isAgricultural = true
+  input.employees[4].isAgricultural = true
+  const date = '2026-02-02'
+  const shifts = [{ employeeId: 4, date, code: 'close' }, { employeeId: 5, date, code: 'close' }]
+  const issues = validateSchedule({ ...input, shifts }).issues
+  assert.ok(issues.some(issue => issue.text === `${date} 농산 직원 오픈 근무 없음`))
+  const onlyOpen = validateSchedule({ ...input, shifts: shifts.map(shift => ({ ...shift, code: 'open' })) }).issues
+  assert.ok(onlyOpen.some(issue => issue.text === `${date} 농산 직원 2명 이상 근무 시 마감 근무 없음`))
+})
+test('regular staff do not close on consecutive days from November 2026 onward', async () => {
+  const input = base()
+  input.month = '2026-11'
+  input.adjacentShifts = [{ employeeId: 1, date: '2026-10-31', code: 'close' }]
+  const result = await generateSchedule(input)
+  verify(input, result)
+  for (const employee of input.employees.filter(item => item.employmentType === '정규직')) {
+    for (const date of monthDates(input.month)) {
+      if (result.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code === 'close')) {
+        const previous = new Date(`${date}T00:00:00Z`)
+        previous.setUTCDate(previous.getUTCDate() - 1)
+        const previousDate = previous.toISOString().slice(0, 10)
+        assert.notEqual(input.adjacentShifts.some(shift => shift.employeeId === employee.id && shift.date === previousDate && shift.code === 'close') || result.shifts.some(shift => shift.employeeId === employee.id && shift.date === previousDate && shift.code === 'close'), true, `${employee.name} closes on consecutive dates through ${date}`)
+      }
+    }
+  }
+})
+test('manual validation flags consecutive regular closings starting November 2026', () => {
+  const input = base()
+  input.month = '2026-11'
+  const shifts = [{ employeeId: 1, date: '2026-11-03', code: 'close' }, { employeeId: 1, date: '2026-11-04', code: 'close' }]
+  const result = validateSchedule({ ...input, shifts })
+  assert.ok(result.issues.some(issue => issue.text === '직원1: 2026-11-04 정규직 마감 연속 배정'))
+  const octoberResult = validateSchedule({ ...input, month: '2026-10', shifts: [{ ...shifts[0], date: '2026-10-03' }, { ...shifts[1], date: '2026-10-04' }] })
+  assert.ok(!octoberResult.issues.some(issue => issue.text.includes('마감 연속 배정')))
 })
 test('rebalance keeps locked cells and prioritizes regular coverage on requested dates', async () => {
   const input = { ...base(), month: '2026-10', lockedThroughDate: '2026-10-08' }

@@ -1,6 +1,8 @@
 import GLPK from 'glpk.js/node'
 
-export const codes = ['open', 'close', 'off']
+export const codes = ['open', 'close', 'full', 'off']
+const workingCodes = ['open', 'close', 'full']
+const coversShift = (assigned, shift) => assigned === shift || assigned === 'full'
 export const defaultRules = { allowedShifts: ['open', 'close'], offRules: [] }
 export function normalizeRules(value = defaultRules) {
   const allowedShifts = value.allowedShifts
@@ -53,10 +55,16 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
   const pending = []
   const stats = []
   for (const date of dates) {
-    const workingCount = employees.filter(e => ['open', 'close'].includes(entries.get(`${e.id}:${date}`))).length
+    const workingCount = employees.filter(e => workingCodes.includes(entries.get(`${e.id}:${date}`))).length
+    const agriculturalEmployees = employees.filter(employee => employee.isAgricultural)
+    const agriculturalWorking = agriculturalEmployees.filter(employee => workingCodes.includes(entries.get(`${employee.id}:${date}`)))
+    if (agriculturalEmployees.length > 0) {
+      if (!agriculturalWorking.some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'open'))) issues.push({ date, text: `${date} 농산 직원 오픈 근무 없음` })
+      if (agriculturalWorking.length >= 2 && !agriculturalWorking.some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'close'))) issues.push({ date, text: `${date} 농산 직원 2명 이상 근무 시 마감 근무 없음` })
+    }
     const fallback = fallbackMinimumWorkersForDate(date, holidays)
     if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
-    for (const code of ['open', 'close']) if (!employees.some(e => e.employmentType === '정규직' && entries.get(`${e.id}:${date}`) === code)) issues.push({ date, text: `${date} ${code === 'open' ? '오픈' : '마감'} 정규직 없음` })
+    for (const code of ['open', 'close']) if (!employees.some(e => e.employmentType === '정규직' && coversShift(entries.get(`${e.id}:${date}`), code))) issues.push({ date, text: `${date} ${code === 'open' ? '오픈' : '마감'} 정규직 없음` })
     for (const pair of settings.daysOffPairs) if (pair.employeeIds.every(id => employees.some(e => e.id === id)) && pair.employeeIds.every(id => entries.get(`${id}:${date}`) === 'off')) issues.push({ date, text: `${date} 동시휴무 제한 위반` })
   }
   for (const employee of employees) {
@@ -67,8 +75,14 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     for (const date of dates) {
       const code = entries.get(`${employee.id}:${date}`)
       if (!code) issues.push({ employeeId: employee.id, date, text: `${employee.name}: ${date} 미편성` })
-      else if (code !== 'off' && !rule.allowedShifts.includes(code)) issues.push({ employeeId: employee.id, date, text: `${employee.name}: ${date} 불가능한 근무 배정` })
+      else if (code !== 'off' && (code === 'full' ? !['open', 'close'].every(shift => rule.allowedShifts.includes(shift)) : !rule.allowedShifts.includes(code))) issues.push({ employeeId: employee.id, date, text: `${employee.name}: ${date} 불가능한 근무 배정` })
       if (isRequiredOff(employee, date) && code !== 'off') issues.push({ employeeId: employee.id, date, text: `${employee.name}: ${date} 정기휴무 필요` })
+      if (date >= '2026-11-01' && employee.employmentType === '정규직' && coversShift(code, 'close')) {
+        const previous = new Date(`${date}T00:00:00Z`)
+        previous.setUTCDate(previous.getUTCDate() - 1)
+        const previousDate = previous.toISOString().slice(0, 10)
+        if (coversShift(entries.get(`${employee.id}:${previousDate}`), 'close')) issues.push({ employeeId: employee.id, date, text: `${employee.name}: ${date} 정규직 마감 연속 배정` })
+      }
     }
   }
   return { targetRestDays: target, issues, pending, stats }
@@ -118,6 +132,7 @@ export async function generateSchedule(input) {
       const vars = codes.map(code => variable(employee.id, date, code))
       lp.binaries.push(...vars.map(v => v.name))
       eq(vars, 1)
+      if (fixed.get(`${employee.id}:${date}`) !== 'full') eq([variable(employee.id, date, 'full')], 0)
       for (const code of ['open', 'close']) if (!rules.allowedShifts.includes(code)) eq([variable(employee.id, date, code)], 0)
       if (isRequiredOff(employee, date)) eq([variable(employee.id, date, 'off')], 1)
       const pinned = fixed.get(`${employee.id}:${date}`)
@@ -166,6 +181,19 @@ export async function generateSchedule(input) {
   }
   for (const date of dates) {
     const dayKey = date.replaceAll('-', '')
+    const agriculturalEmployees = employees.filter(employee => employee.isAgricultural)
+    if (agriculturalEmployees.length > 0) {
+      lo([
+        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'open')),
+        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'full')),
+      ], 1)
+      // If two or more agricultural employees work, at least one must be on close.
+      up([
+        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'open')),
+        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'close', 1 - agriculturalEmployees.length)),
+        ...agriculturalEmployees.map(employee => variable(employee.id, date, 'full', 1 - agriculturalEmployees.length)),
+      ], 1)
+    }
     const shiftImbalance = `open_close_imbalance_${dayKey}`
     lp.bounds.push({ name: shiftImbalance, type: glpk.GLP_LO, lb: 0, ub: 0 })
     dailyShiftImbalanceSlacks.push({ name: shiftImbalance, coef: 1 })
@@ -174,20 +202,31 @@ export async function generateSchedule(input) {
     const staffingShortfall = `missing_staff_${dayKey}`
     lp.bounds.push({ name: staffingShortfall, type: glpk.GLP_LO, lb: 0, ub: 0 })
     dailyStaffingSlacks.push({ name: staffingShortfall, coef: 1 })
-    lo([...employees.flatMap(employee => ['open', 'close'].map(code => variable(employee.id, date, code))), { name: staffingShortfall, coef: 1 }], minimumWorkersForDate(date, holidays))
+    lo([...employees.flatMap(employee => [...['open', 'close'].map(code => variable(employee.id, date, code)), variable(employee.id, date, 'full')]), { name: staffingShortfall, coef: 1 }], minimumWorkersForDate(date, holidays))
     const fallbackShortfall = `missing_fallback_staff_${dayKey}`
     lp.bounds.push({ name: fallbackShortfall, type: glpk.GLP_LO, lb: 0, ub: 0 })
     fallbackStaffingSlacks.push({ name: fallbackShortfall, coef: 1 })
-    lo([...employees.flatMap(employee => ['open', 'close'].map(code => variable(employee.id, date, code))), { name: fallbackShortfall, coef: 1 }], fallbackMinimumWorkersForDate(date, holidays))
+    lo([...employees.flatMap(employee => [...['open', 'close'].map(code => variable(employee.id, date, code)), variable(employee.id, date, 'full')]), { name: fallbackShortfall, coef: 1 }], fallbackMinimumWorkersForDate(date, holidays))
     for (const code of ['open', 'close']) {
       const slack = `missing_regular_${date.replaceAll('-', '')}_${code}`
       lp.binaries.push(slack)
       regularStaffingSlacks.push({ name: slack, coef: 1 })
       // Preserve both shifts, even if the monthly rest quota makes regular-only coverage impossible.
-      lo(employees.map(e => variable(e.id, date, code)), 1)
-      lo([...employees.filter(e => e.employmentType === '정규직').map(e => variable(e.id, date, code)), { name: slack, coef: 1 }], 1)
+      lo([...employees.map(e => variable(e.id, date, code)), ...employees.map(e => variable(e.id, date, 'full'))], 1)
+      lo([...employees.filter(e => e.employmentType === '정규직').map(e => variable(e.id, date, code)), ...employees.filter(e => e.employmentType === '정규직').map(e => variable(e.id, date, 'full')), { name: slack, coef: 1 }], 1)
     }
     for (const pair of settings.daysOffPairs) if (pair.employeeIds.length === 2 && pair.employeeIds.every(id => employees.some(e => e.id === id))) up(pair.employeeIds.map(id => variable(id, date, 'off')), 1)
+  }
+  for (const employee of employees.filter(item => item.employmentType === '정규직')) for (const date of dates) {
+    if (date < '2026-11-01') continue
+    const previous = new Date(`${date}T00:00:00Z`)
+    previous.setUTCDate(previous.getUTCDate() - 1)
+    const previousDate = previous.toISOString().slice(0, 10)
+    if (dates.includes(previousDate)) up([
+      variable(employee.id, previousDate, 'close'), variable(employee.id, previousDate, 'full'),
+      variable(employee.id, date, 'close'), variable(employee.id, date, 'full'),
+    ], 1)
+    else if (adjacentShifts.some(shift => shift.employeeId === employee.id && shift.date === previousDate && coversShift(shift.code, 'close'))) eq([variable(employee.id, date, 'close'), variable(employee.id, date, 'full')], 0)
   }
   const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'fallback_then_target_staffing_shortfall_then_regular_gaps', vars: [...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...dailyStaffingSlacks.map(item => ({ ...item, coef: 1_000_000 })), ...regularStaffingSlacks.map(item => ({ ...item, coef: 1_000 }))] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: 12, mipgap: 0 })
   if (![glpk.GLP_OPT, glpk.GLP_FEAS].includes(staffingSolution.result.status)) return { error: staffingSolution.result.status === glpk.GLP_NOFEAS ? '월별 휴무, 주간 휴무, 직원별 정기휴무 및 기존 배정을 동시에 만족할 수 없습니다. 기존 근무표는 유지됩니다.' : '제한 시간 안에 조건을 만족하는 기본 근무표를 찾지 못했습니다. 기존 근무표는 유지됩니다.' }
