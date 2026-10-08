@@ -1,6 +1,5 @@
 const { app, BrowserWindow, dialog } = require('electron')
 const { spawn } = require('node:child_process')
-const path = require('node:path')
 
 const root = app.getAppPath()
 const port = process.env.PORT ?? '3001'

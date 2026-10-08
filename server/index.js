@@ -5,7 +5,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { createServer } from 'node:http'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
-import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, validateSchedule, seoulDateKey } from './planner.js'
+import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -103,7 +103,7 @@ const defaultSettings = {
     open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
   },
-  daysOffPairs: [], additionalHolidays: [], confirmedMonths: [], weeklyRestPolicy: 'minimum', operations: { ...defaultOperationRules },
+  daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], confirmedMonths: [], weeklyRestPolicy: 'minimum', operations: { ...defaultOperationRules },
 }
 if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main')) {
   const settings = structuredClone(defaultSettings)
@@ -125,6 +125,7 @@ function readSettings() {
     const settings = { ...defaultSettings, ...stored, operations: { ...defaultOperationRules, ...(stored.operations ?? {}) } }
     if (!db.prepare('SELECT 1 FROM employees WHERE active = 1 AND produce_qualified = 1 LIMIT 1').get()) settings.operations.produceOpenCount = 0
     settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
+    settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
     const substituteIds = ['김효섭', '최창섭'].map(name => db.prepare('SELECT id FROM employees WHERE trim(name) = ? AND active = 1 ORDER BY sort_order,id LIMIT 1').get(name)?.id)
     if (substituteIds.every(Number.isInteger) && !settings.daysOffPairs.some(pair => pair.employeeIds?.length === 2 && substituteIds.every(id => pair.employeeIds.includes(id)))) settings.daysOffPairs.push({ employeeIds: substituteIds })
     return settings
@@ -419,6 +420,10 @@ app.put('/api/settings', requireAdmin, (req, res) => {
     if (incoming.additionalHolidays.some(date => typeof date !== 'string' || !validDate(date))) return res.status(400).json({ error: '실제로 존재하는 공휴일 날짜를 입력해 주세요.' })
     settings.additionalHolidays = [...new Set(incoming.additionalHolidays)].sort()
   }
+  if (Array.isArray(incoming.produceOpenExceptions)) {
+    if (incoming.produceOpenExceptions.some(date => typeof date !== 'string' || !validDate(date))) return res.status(400).json({ error: '농산 오픈 예외 날짜를 확인해 주세요.' })
+    settings.produceOpenExceptions = [...new Set(incoming.produceOpenExceptions)].sort()
+  }
   if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
   if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
   if (incoming.operations !== undefined) {
@@ -545,6 +550,22 @@ app.post('/api/shifts/lock-existing', requireAdmin, (req, res) => {
   })()
   res.json({ ok: true, month, locked: count, alreadyLocked: false })
 })
+app.post('/api/shifts/lock-cell', requireAdmin, (req, res) => {
+  const employeeId = Number(req.body?.employeeId)
+  const date = String(req.body?.date ?? '')
+  const lock = req.body?.locked === true
+  if (!Number.isInteger(employeeId) || !validDate(date) || date <= seoulDateKey()) return res.status(400).json({ error: '고정할 직원과 미래 날짜를 확인해 주세요.' })
+  const shift = db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employeeId, date)
+  if (!shift) return res.status(404).json({ error: '먼저 근무 칸에 오픈·마감·휴무를 입력해 주세요.' })
+  db.transaction(() => {
+    if (lock) {
+      db.prepare('INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code').run(employeeId, date, shift.code)
+      db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(date.slice(0, 7))
+    } else db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employeeId, date)
+  })()
+  dataRevision++
+  res.json({ ok: true, locked: lock })
+})
 app.post('/api/shifts/confirm', requireAdmin, (req, res) => {
   const month = String(req.body?.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식을 확인해 주세요.' })
@@ -594,6 +615,73 @@ app.post('/api/shifts/reset', requireAdmin, async (req, res, next) => {
   } catch (error) { next(error) }
 })
 let generating = false
+function solveInWorker(input, timeoutMs = 30_000) {
+  return new Promise((resolve, reject) => {
+    let received = false
+    const worker = new Worker(new URL('./planner-worker.js', import.meta.url), { workerData: input })
+    const timer = setTimeout(() => { void worker.terminate(); reject(new Error('자동편성 시간이 초과되었습니다.')) }, timeoutMs)
+    worker.once('message', value => { received = true; clearTimeout(timer); resolve(value) })
+    worker.once('error', error => { clearTimeout(timer); reject(error) })
+    worker.once('exit', code => { clearTimeout(timer); if (!received || code !== 0) reject(new Error('자동편성 작업이 종료되었습니다.')) })
+  })
+}
+app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
+  const month = String(req.body?.month ?? '')
+  const mode = req.body?.mode ?? 'replace'
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !['replace', 'fill', 'rebalance'].includes(mode)) return res.status(400).json({ error: '월과 자동편성 방식을 확인해 주세요.' })
+  if (mode === 'replace' && db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: `${month}은 기존에 입력한 근무가 확정되어 있습니다. 빈칸 채우기를 사용해 주세요.` })
+  if (mode === 'rebalance' && !db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: '먼저 ‘입력된 칸 고정’으로 직접 입력한 근무를 보호해 주세요.' })
+  if (generating) return res.status(409).json({ error: '자동편성 중입니다. 잠시 후 다시 실행해 주세요.' })
+  generating = true
+  const revision = dataRevision
+  try {
+    const input = { ...planningInput(month), mode, lockedThroughDate: seoulDateKey(), alternativeSearch: true }
+    const options = []
+    const seen = new Set()
+    for (let attempt = 0; attempt < 8 && options.length < 5; attempt++) {
+      const result = await solveInWorker({ ...input, seed: 7717 + attempt * 104729 }, 9_000)
+      if (result.error) return res.status(422).json({ error: result.error })
+      const hardIssues = validateSchedule({ ...input, shifts: result.shifts }).issues.filter(issue => issue.text.includes('미편성'))
+      if (hardIssues.length) continue
+      const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
+      if (seen.has(signature)) continue
+      seen.add(signature)
+      options.push({ id: options.length + 1, shifts: result.shifts, warnings: result.warnings ?? [], optimal: result.optimal })
+    }
+    if (revision !== dataRevision) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
+    if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
+    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored: 8, revision })
+  } catch (error) { next(error) }
+  finally { generating = false }
+})
+app.post('/api/shifts/apply-option', requireAdmin, (req, res, next) => {
+  const month = String(req.body?.month ?? '')
+  const shifts = req.body?.shifts
+  const mode = req.body?.mode ?? 'replace'
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !['replace', 'fill', 'rebalance'].includes(mode) || !Array.isArray(shifts)) return res.status(400).json({ error: '선택한 편성안을 확인해 주세요.' })
+  if (mode === 'replace' && db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: `${month}은 기존 입력이 고정되어 있습니다. 고정 입력을 유지하는 방식으로 다시 대안을 찾아 주세요.` })
+  if (mode === 'rebalance' && !db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: '고정된 근무 칸이 없습니다. 다시 대안을 찾아 주세요.' })
+  if (!Number.isInteger(req.body?.revision) || req.body.revision !== dataRevision) return res.status(409).json({ error: '대안을 만든 뒤 근무표나 조건이 변경되었습니다. 최신 정보로 다시 대안을 찾아 주세요.' })
+  try {
+    const input = { ...planningInput(month), mode, lockedThroughDate: seoulDateKey() }
+    const dates = new Set(monthDates(month))
+    const employeeIds = new Set(input.employees.map(employee => employee.id))
+    if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
+    if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
+    const issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.text.includes('미편성'))
+    if (issues.length) return res.status(422).json({ error: '편성안에 미입력된 칸이 있습니다.' })
+    const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
+    db.transaction(() => {
+      if (mode === 'replace') db.prepare('DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?').run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
+      if (mode === 'rebalance') db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ? AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
+      const insert = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO NOTHING')
+      for (const entry of shifts) if (entry.date > input.lockedThroughDate || existingCells.has(`${entry.employeeId}:${entry.date}`)) insert.run(entry.employeeId, entry.date, entry.code)
+      invalidateConfirmed()
+    })()
+    dataRevision++
+    res.json({ ok: true })
+  } catch (error) { next(error) }
+})
 app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
   const month = String(req.body?.month ?? '')
   const mode = req.body?.mode ?? 'replace'
@@ -626,7 +714,6 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
     if (revision !== dataRevision) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요. 기존 근무표는 유지됩니다.' })
     const validation = validateSchedule({ ...input, shifts: result.shifts })
     const regularCoverageGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
-    const dailyStaffingIssues = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} 최소 근무인원 미충족/.test(issue.text))
     const hardIssues = validation.issues.filter(issue => issue.text.includes('미편성'))
     if (hardIssues.length) return res.status(422).json({ error: `검증 실패: ${hardIssues.slice(0, 3).map(issue => issue.text).join(' · ')}` })
     const warnings = [...(result.warnings ?? [])]

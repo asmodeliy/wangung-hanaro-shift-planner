@@ -182,3 +182,14 @@ test('holiday weekends count once; leap days and real dates validate', () => {
   assert.equal(validDate('2028-02-29'), true)
   assert.throws(() => normalizeRules({ allowedShifts: [], offRules: [] }))
 })
+test('manager produce-open exception is honored by schedule validation', () => {
+  const input = {
+    ...base(), month: '2026-10',
+    employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 1 })),
+    settings: { operations: { produceOpenCount: 1 }, produceOpenExceptions: [] },
+    shifts: monthDates('2026-10').flatMap(date => employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 1 ? 'off' : 'open' }))),
+  }
+  assert.ok(validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
+  input.settings.produceOpenExceptions = ['2026-10-01']
+  assert.ok(!validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
+})
