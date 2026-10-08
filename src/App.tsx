@@ -3,22 +3,30 @@ import './App.css'
 
 type Role = 'admin' | 'employee'
 type User = { id: number; username: string; role: Role; employeeId: number | null; employeeName: string | null }
-type Employee = { id: number; name: string; employmentType?: '정규직' | '계약직'; active: number | boolean; notes: string }
+type WorkRules = { allowedShifts: ('open' | 'close')[]; offRules: { weekday: number; occurrences: number[] }[] }
+type Validation = { issues: { date?: string; employeeId?: number; text: string }[]; pending: { date?: string; employeeId?: number; text: string }[]; stats: { employeeId: number; target: number; off: number; open: number; close: number }[] }
+type Employee = { id: number; name: string; employmentType?: '정규직' | '계약직'; active: number | boolean; notes: string; workRules?: WorkRules }
 type ShiftCode = 'open' | 'close' | 'off'
-type Shift = { employeeId: number; employeeName: string; date: string; code: ShiftCode; employmentType?: Employee['employmentType']; start?: string | null; end?: string | null }
+type Shift = { employeeId: number; employeeName: string; date: string; code: ShiftCode; employmentType?: Employee['employmentType']; start?: string | null; end?: string | null; locked?: boolean }
 type DayRequest = { id: number; employeeId: number; employeeName: string; date: string; status: 'pending' | 'approved' | 'rejected' }
 type Account = { id: number; username: string; role: Role; employeeId: number | null; employeeName: string | null }
 type Times = { start: string; end: string }
-type Settings = { shiftTimes: Record<'open' | 'close', Record<'regular' | 'contract', Times>>; daysOffPairs: { employeeIds: number[] }[]; additionalHolidays: string[]; confirmedMonths: string[] }
+type Settings = { shiftTimes: Record<'open' | 'close', Record<'regular' | 'contract', Times>>; daysOffPairs: { employeeIds: number[] }[]; additionalHolidays: string[]; confirmedMonths: string[]; weeklyRestPolicy?: 'minimum' | 'exact' }
+type PhotoImport = { month: string; entries: { employeeId: number; date: string; code: ShiftCode }[]; notes: { id: number; date: string; text: string; resolved: boolean }[] }
 type Holiday = { date: string; name: string }
 type Page = 'schedule' | 'requests' | 'employees' | 'settings'
 
 const weekdays = ['일', '월', '화', '수', '목', '금', '토']
-const today = new Date()
+const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]))
+const todayKey = `${todayParts.year}-${todayParts.month}-${todayParts.day}`
+const [todayYear, todayMonth, todayDay] = todayKey.split('-').map(Number)
+const today = new Date(todayYear, todayMonth - 1, todayDay)
 const defaultSettings: Settings = { shiftTimes: { open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } }, close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } } }, daysOffPairs: [], additionalHolidays: [], confirmedMonths: [] }
 const monthLabel = (date: Date) => `${date.getFullYear()}년 ${date.getMonth() + 1}월`
 const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+const isApprovedHopeVisible = (date: string, request?: DayRequest) => date >= '2026-11-01' && request?.status === 'approved'
+const isLockedDate = (date: string) => date <= todayKey
 const isActive = (employee: Employee) => employee.active === true || employee.active === 1
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
@@ -60,6 +68,9 @@ function App() {
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [validation, setValidation] = useState<Validation>({ issues: [], pending: [], stats: [] })
+  const [generating, setGenerating] = useState(false)
+  const [photoImport, setPhotoImport] = useState<PhotoImport | null>(null)
   const [referenceAvailable, setReferenceAvailable] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -109,8 +120,8 @@ function App() {
       ])
       setEmployees(staff); setShifts(entries); setRequests(dayRequests); setHolidays(days)
       if (user.role === 'admin') {
-        const [savedSettings, accountRows, reference] = await Promise.all([api<Settings>('/api/settings'), api<Account[]>('/api/users'), api<{ available: boolean }>('/api/reference-schedule/status')])
-        setSettings(savedSettings); setAccounts(accountRows); setReferenceAvailable(reference.available)
+        const [savedSettings, accountRows, reference, checked, imported] = await Promise.all([api<Settings>('/api/settings'), api<Account[]>('/api/users'), api<{ available: boolean }>('/api/reference-schedule/status'), api<Validation>(`/api/shifts/validation?month=${monthKey(month)}`), api<PhotoImport | null>('/api/reference-schedule/import')])
+        setSettings(savedSettings); setAccounts(accountRows); setReferenceAvailable(reference.available); setValidation(checked); setPhotoImport(imported)
       }
     } catch (e) { setError(e instanceof Error ? e.message : '서버에 연결할 수 없습니다.') }
     finally { setLoading(false) }
@@ -126,28 +137,12 @@ function App() {
   const pendingCount = requests.filter(item => item.status === 'pending').length
   const workCount = shifts.filter(item => item.code === 'open' || item.code === 'close').length
   const confirmed = settings.confirmedMonths.includes(monthKey(month))
+  const lockedShiftCount = shifts.filter(item => item.date.startsWith(`${monthKey(month)}-`) && item.locked).length
+  const hasLockedShifts = lockedShiftCount > 0
   const isAdmin = user?.role === 'admin'
 
-  const issues = useMemo(() => {
-    const result: { date?: string; text: string }[] = []
-    if (isAdmin && shifts.length < activeEmployees.length * dayCount) result.push({ text: `미편성 근무 ${activeEmployees.length * dayCount - shifts.length}칸이 있습니다.` })
-    if (isAdmin) for (let d = 1; d <= dayCount; d++) {
-      const date = dateKey(new Date(month.getFullYear(), month.getMonth(), d))
-      const byId = new Map(activeEmployees.map(employee => [employee.id, shiftMap.get(`${employee.id}:${date}`)?.code]))
-      const openRegular = activeEmployees.filter(e => e.employmentType === '정규직' && byId.get(e.id) === 'open').length
-      const closeRegular = activeEmployees.filter(e => e.employmentType === '정규직' && byId.get(e.id) === 'close').length
-      if (!openRegular) result.push({ date, text: `${d}일 오픈 정규직 없음` })
-      if (!closeRegular) result.push({ date, text: `${d}일 마감 정규직 없음` })
-      for (const pair of settings.daysOffPairs) if (pair.employeeIds.length === 2 && pair.employeeIds.every(id => byId.get(id) === 'off')) result.push({ date, text: `${d}일 동시휴무 제한 확인` })
-    }
-    if (isAdmin) for (const employee of activeEmployees) {
-      const rest = shifts.filter(s => s.employeeId === employee.id && s.code === 'off').length
-      if (rest !== restTarget) result.push({ text: `${employee.name}: 기준 휴무 ${restTarget}일 / 배정 ${rest}일` })
-    }
-    const applicableRequests = isAdmin ? requests.filter(r => r.status !== 'rejected') : requests
-    for (const request of applicableRequests) if (shiftMap.get(`${request.employeeId}:${request.date}`)?.code !== 'off') result.push({ date: request.date, text: `${request.employeeName}: ${Number(request.date.slice(-2))}일 희망휴무 미반영` })
-    return result
-  }, [isAdmin, shifts, activeEmployees, dayCount, month, shiftMap, settings.daysOffPairs, restTarget, requests])
+  const issues = isAdmin ? [...validation.issues, ...validation.pending] : []
+  const requestWarnings = requests.filter(item => item.status !== 'rejected' && shiftMap.get(item.employeeId + ':' + item.date)?.code !== 'off').map(item => ({ text: item.employeeName + ': ' + item.date + ' 희망휴무 미반영' }))
 
   const toast = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
   const changeMonth = (delta: number) => setMonth(current => new Date(current.getFullYear(), current.getMonth() + delta, 1))
@@ -158,13 +153,15 @@ function App() {
   const logout = async () => { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null); setEmployees([]); setShifts([]); setRequests([]) } }
   const saveShift = async (employeeId: number, day: number, code: ShiftCode | '') => {
     const date = dateKey(new Date(month.getFullYear(), month.getMonth(), day))
+    if (isLockedDate(date)) { setError(`${date}는 지난 날짜라 고정되어 수정할 수 없습니다.`); return }
+    if (shiftMap.get(`${employeeId}:${date}`)?.locked) { setError(`${date}에 입력한 근무는 확정되어 수정할 수 없습니다.`); return }
     const previous = shifts
     const employee = employees.find(item => item.id === employeeId)
     setShifts(list => [...list.filter(item => !(item.employeeId === employeeId && item.date === date)), ...(code ? [{ employeeId, employeeName: employee?.name ?? '', date, code, employmentType: employee?.employmentType }] : [])])
-    try { await api('/api/shifts', { method: 'PUT', body: JSON.stringify({ employeeId, date, code }) }); toast('근무표를 저장했습니다.') }
+    try { await api('/api/shifts', { method: 'PUT', body: JSON.stringify({ employeeId, date, code }) }); await load(); toast('근무표를 저장했습니다.') }
     catch (e) { setShifts(previous); setError(e instanceof Error ? e.message : '저장하지 못했습니다.') }
   }
-  const cycleShift = (shift?: Shift) => shift?.code === 'open' ? 'close' : shift?.code === 'close' ? 'off' : 'open'
+  const cycleShift = (shift?: Shift): ShiftCode | '' => shift?.code === 'open' ? 'close' : shift?.code === 'close' ? 'off' : shift?.code === 'off' ? '' : 'open'
   const saveEmployee = async (data: Omit<Employee, 'id'>, id?: number) => {
     try {
       await api(id ? `/api/employees/${id}` : '/api/employees', { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) })
@@ -190,14 +187,44 @@ function App() {
     try { setSettings(await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(value) })); await load(); toast('근무 설정을 저장했습니다.') }
     catch (e) { setError(e instanceof Error ? e.message : '설정을 저장하지 못했습니다.') }
   }
-  const generate = async () => {
-    if (!window.confirm(`${monthLabel(month)} 근무표를 새로 편성할까요? 현재 월의 배정이 교체됩니다.`)) return
+  const generate = async (mode: 'replace' | 'fill' | 'rebalance' = 'replace', prioritizeRegularCoverageDates: number[] = [], preferEmployeeOffOnRegularGapEmployeeId?: number) => {
+    if (mode === 'replace' && hasLockedShifts) { setError(`${monthKey(month)}은 입력 근무가 확정되어 있어 전체 자동 편성을 할 수 없습니다. 빈칸 채우기를 사용해 주세요.`); return }
+    const selectedMonthKey = monthKey(month)
+    const currentMonthKey = todayKey.slice(0, 7)
+    const replacementScope = selectedMonthKey > currentMonthKey
+      ? `${monthLabel(month)}에 저장된 기존 배정을 모두 교체합니다. 다른 달의 근무표는 변경하지 않습니다.`
+      : selectedMonthKey === currentMonthKey
+        ? `${todayKey}까지 지난 날짜는 유지하고, 이후 배정만 교체합니다.`
+        : `${monthLabel(month)}은 지난 달이라 기존 배정은 모두 유지됩니다.`
+    if (mode === 'replace' && !window.confirm(`${monthLabel(month)} 근무표를 새로 편성할까요? ${replacementScope}`)) return
+    const octoberStaffingPolicy = monthKey(month) === '2026-10'
+    if (mode === 'rebalance' && !window.confirm(`직접 입력해 고정한 근무와 ${todayKey}까지 지난 날짜는 유지하고, 이후 미고정 배정만 다시 편성합니다. 평일 5명·주말 및 공휴일 4명을 목표로 하며, 불가능하면 평일 4명·주말 및 공휴일 3명까지 배정합니다. 완화 기준 미달만 하단 확인 항목에 표시합니다.${preferEmployeeOffOnRegularGapEmployeeId && octoberStaffingPolicy ? ' 정규직 공백일에는 이화진보다 진해경·차용호가 근무하도록 배정하고, 17일은 예외로 둡니다.' : ''}`)) return
+    setGenerating(true); setError('')
     try {
-      const result = await api<{ targetRestDays: number; warnings: string[] }>('/api/shifts/generate', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) })
+      const monthValue = monthKey(month)
+      const useOctoberGapPreference = monthValue === '2026-10' && preferEmployeeOffOnRegularGapEmployeeId !== undefined
+      const result = await api<{ targetRestDays: number; warnings: string[]; backup?: string }>('/api/shifts/generate', { method: 'POST', body: JSON.stringify({ month: monthValue, mode, prioritizeRegularCoverageDates: prioritizeRegularCoverageDates.map(day => `${monthValue}-${String(day).padStart(2, '0')}`), ...(useOctoberGapPreference ? { preferEmployeeOffOnRegularGap: { employeeId: preferEmployeeOffOnRegularGapEmployeeId, excludedDates: [`${monthValue}-17`] } } : {}) }) })
       await load()
-      if (result.warnings.length) setError(`근무표를 만들었습니다. 아래 조건은 확인해 주세요. ${result.warnings.slice(0, 4).join(' · ')}${result.warnings.length > 4 ? ` 외 ${result.warnings.length - 4}건` : ''}`)
-      else toast(`자동 편성 완료 · 기준 휴무 ${result.targetRestDays}일`)
-    } catch (e) { setError(e instanceof Error ? e.message : '자동 편성 결과를 만들지 못했습니다.') }
+      if (result.warnings.length) setError(`근무표를 만들었습니다. 아래 조건은 확인해 주세요. ${result.warnings.slice(0, 4).join(' · ')}${result.warnings.length > 4 ? ` 외 ${result.warnings.length - 4}건` : ''}${result.backup ? ` · 이전 근무표 백업: ${result.backup}` : ''}`)
+      else toast(`자동 편성 완료 · 기준 휴무 ${result.targetRestDays}일${result.backup ? ` · 백업 ${result.backup}` : ''}`)
+    } catch (e) { setError(e instanceof Error ? e.message : '자동 편성 결과를 만들지 못했습니다.') } finally { setGenerating(false) }
+  }
+  const lockExistingShifts = async () => {
+    try {
+      const result = await api<{ locked: number; alreadyLocked: boolean }>('/api/shifts/lock-existing', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) })
+      await load()
+      toast(result.alreadyLocked ? `이미 고정된 근무 ${result.locked}칸을 유지했습니다.` : `기존 입력 ${result.locked}칸을 고정했습니다. 빈칸은 계속 편집할 수 있습니다.`)
+    } catch (e) { setError(e instanceof Error ? e.message : '기존 입력을 고정하지 못했습니다.') }
+  }
+  const resetMonth = async () => {
+    const monthName = monthLabel(month)
+    const assignedCount = shifts.filter(shift => shift.date.startsWith(monthKey(month)) && !isLockedDate(shift.date)).length
+    if (!window.confirm(`${monthName}의 이후 근무 ${assignedCount}건을 초기화할까요? 지난 날짜는 고정되어 유지됩니다. 초기화 전 근무표는 백업됩니다.`)) return
+    try {
+      const result = await api<{ deleted: number; backup: string; preservedThrough: string }>('/api/shifts/reset', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) })
+      await load()
+      toast(`${monthName} 이후 근무 ${result.deleted}건을 초기화했습니다. ${result.preservedThrough}까지는 유지됩니다. 백업 ${result.backup}`)
+    } catch (e) { setError(e instanceof Error ? e.message : '근무표를 초기화하지 못했습니다.') }
   }
   const updateRequest = async (item: DayRequest, status: DayRequest['status']) => {
     try { await api(`/api/requests/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); await load(); toast('신청 상태를 변경했습니다.') }
@@ -212,11 +239,16 @@ function App() {
     try { await api(`/api/requests/${item.id}`, { method: 'DELETE' }); await load(); toast('신청을 취소했습니다.') }
     catch (e) { setError(e instanceof Error ? e.message : '신청을 취소하지 못했습니다.') }
   }
+  const resolvePhotoNote = async (id: number, resolved: boolean) => {
+    try { await api('/api/reference-schedule/import/' + id, { method: 'PATCH', body: JSON.stringify({ resolved }) }); await load(); toast('사진 확인 상태를 저장했습니다.') }
+    catch (e) { setError(e instanceof Error ? e.message : '확인 상태를 저장하지 못했습니다.') }
+  }
   const toggleDate = (date: string) => setChosenDates(values => values.includes(date) ? values.filter(value => value !== date) : [...values, date].sort())
   const addHoliday = async () => { if (!holidayDate) return; await saveSettings({ ...settings, additionalHolidays: [...new Set([...settings.additionalHolidays, holidayDate])].sort() }); setHolidayDate('') }
   const confirmSchedule = async () => {
-    if (issues.length) { setError(`확정 전에 확인이 필요합니다. ${issues.slice(0, 3).map(item => item.text).join(' · ')}`); return }
-    await saveSettings({ ...settings, confirmedMonths: [...new Set([...settings.confirmedMonths, monthKey(month)])] })
+    const blockingIssues = issues.filter(item => !/^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(item.text))
+    if (blockingIssues.length) { setError(`확정 전에 확인이 필요합니다. ${blockingIssues.slice(0, 3).map(item => item.text).join(' · ')}`); return }
+    try { await api('/api/shifts/confirm', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) }); await load(); toast('근무표를 확정했습니다.') } catch (e) { setError(e instanceof Error ? e.message : '확정하지 못했습니다.'); await load() }
   }
 
   if (!authChecked) return <div className="boot-screen"><BrandMark/><span>왕궁농협 하나로마트</span><i/></div>
@@ -237,11 +269,11 @@ function App() {
       <div className="page-content">
         {error && <div className="alert" role="alert"><span className="alert-mark">!</span><p>{error}</p><button onClick={() => setError('')}>확인</button></div>}
         {page === 'schedule' && <>
-          <div className="page-heading"><div><h1>{isAdmin ? '월간 근무표' : `${user.employeeName ?? '내'} 근무 일정`}</h1><p>{isAdmin ? '희망휴무와 매장 운영 조건을 살펴보고 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'}</p></div><div className="heading-actions"><button className="button button-quiet print-action" onClick={() => window.print()}><Icon name="print"/> 인쇄</button>{isAdmin && <>{referenceAvailable && <button className="button button-quiet reference-open" onClick={() => setShowReference(true)}><Icon name="calendar" size={16}/> 수기 근무표</button>}<button className="button button-primary" onClick={() => void generate()}><Icon name="spark" size={16}/> 자동 편성</button></>}</div></div>
+          <div className="page-heading"><div><h1>{isAdmin ? '월간 근무표' : `${user.employeeName ?? '내'} 근무 일정`}</h1><p>{isAdmin ? '희망휴무와 매장 운영 조건을 살펴보고 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'}</p></div><div className="heading-actions"><button className="button button-quiet print-action" onClick={() => window.print()}><Icon name="print"/> 인쇄</button>{isAdmin && <>{referenceAvailable && <button className="button button-quiet reference-open" onClick={() => setShowReference(true)}><Icon name="calendar" size={16}/> 수기 근무표</button>}{hasLockedShifts ? <span className="locked-shifts-badge" role="status">기존 입력 {lockedShiftCount}칸 고정</span> : <button className="button button-quiet" disabled={generating} onClick={() => void lockExistingShifts()}>입력된 칸 고정</button>}<button className="button button-quiet" disabled={generating} onClick={() => void generate('fill')}>빈칸 채우기</button>{hasLockedShifts && <button className="button button-quiet" disabled={generating} title={monthKey(month) === '2026-10' ? '기존 고정 입력과 10월 8일까지 일정은 유지합니다. 평일 5명·주말 및 공휴일 4명을 목표로 하고, 불가능하면 평일 4명·주말과 공휴일 3명까지 편성합니다.' : '기존 고정 입력을 유지하고 평일 5명·주말/공휴일 4명을 목표로 편성합니다. 오픈과 마감 인원도 날짜별로 균형을 맞춥니다.'} onClick={() => void generate('rebalance', monthKey(month) === '2026-10' ? [10, 16, 21] : [], monthKey(month) === '2026-10' ? activeEmployees.find(employee => employee.name === '이화진')?.id : undefined)}>{monthKey(month) === '2026-10' ? '10월 목표인원으로 재편성' : '기준 인원으로 재편성'}</button>}<button className="button button-primary" disabled={generating || hasLockedShifts} title={hasLockedShifts ? '확정된 기존 입력이 있어 빈칸 채우기만 사용할 수 있습니다.' : undefined} onClick={() => void generate()}><Icon name="spark" size={16}/>{generating ? '편성 중…' : '전체 자동 편성'}</button></>}</div></div>
           <section className="schedule-workspace">
-            <div className="schedule-toolbar"><div className="month-picker"><button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button><button className="today-button" onClick={() => setMonth(new Date(today.getFullYear(), today.getMonth(), 1))}>오늘</button></div><div className="schedule-meta"><span className="meta-pill"><Icon name="clock" size={15}/> 기준 휴무 <b>{restTarget}일</b></span>{isAdmin && <span className={`schedule-status ${confirmed ? 'is-confirmed' : ''}`}><i/>{confirmed ? '확정된 근무표' : '작성 중'}</span>}</div></div>
+            <div className="schedule-toolbar"><div className="month-picker"><button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button><button className="today-button" onClick={() => setMonth(new Date(today.getFullYear(), today.getMonth(), 1))}>오늘</button>{isAdmin && <button className="button button-quiet reset-month" disabled={generating} onClick={() => void resetMonth()}>{monthLabel(month)} 초기화</button>}</div><div className="schedule-meta"><span className="meta-pill"><Icon name="clock" size={15}/> 기준 휴무 <b>{restTarget}일</b></span>{isAdmin && <span className={`schedule-status ${confirmed ? 'is-confirmed' : ''}`}><i/>{confirmed ? '확정된 근무표' : '작성 중'}</span>}</div></div>
             {isAdmin && <div className="schedule-summary"><div><span>재직 직원</span><b>{activeEmployees.length}<small>명</small></b></div><div><span>배정 근무</span><b>{workCount}<small>건</small></b></div><div><span>휴무 신청</span><b>{requests.length}<small>건</small></b></div><div><span>확인 항목</span><b className={issues.length ? 'number-warn' : ''}>{issues.length}<small>건</small></b></div></div>}
-            <div className="schedule-legend"><span><i className="key-open"/>오픈</span><span><i className="key-close"/>마감</span><span><i className="key-off"/>휴무</span><span><i className="key-request"/>희망휴무 신청</span><span className="legend-tip">{isAdmin ? '일정을 누르면 오픈 · 마감 · 휴무 순으로 변경됩니다.' : '본인 일정은 이름 옆에 표시됩니다.'}</span><div className="view-toggle" role="group" aria-label="근무표 보기 방식"><button aria-pressed={viewMode === 'table'} className={viewMode === 'table' ? 'selected' : ''} onClick={() => changeViewMode('table')}>표</button><button aria-pressed={viewMode === 'calendar'} className={viewMode === 'calendar' ? 'selected' : ''} onClick={() => changeViewMode('calendar')}>달력</button></div></div>
+            <div className="schedule-legend"><span><i className="key-open"/>오픈</span><span><i className="key-close"/>마감</span><span><i className="key-off"/>휴무</span><span><i className="key-request"/>희망휴무 신청</span><span className="approved-hope-key">희망 승인</span><span className="legend-tip">{isAdmin ? '일정을 누르면 오픈 · 마감 · 휴무 · 비우기 순으로 변경됩니다.' : '본인 일정은 이름 옆에 표시됩니다.'}</span><div className="view-toggle" role="group" aria-label="근무표 보기 방식"><button aria-pressed={viewMode === 'table'} className={viewMode === 'table' ? 'selected' : ''} onClick={() => changeViewMode('table')}>표</button><button aria-pressed={viewMode === 'calendar'} className={viewMode === 'calendar' ? 'selected' : ''} onClick={() => changeViewMode('calendar')}>달력</button></div></div>
             {loading ? <div className="loading-state"><i/>근무표를 불러오는 중입니다.</div> : <>
               {viewMode === 'table' && <div className="schedule-scroll"><table className="schedule-table"><thead><tr><th className="staff-col">직원</th>{Array.from({ length: dayCount }, (_, i) => { const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); return <th key={i} className={`${d.getDay() === 0 || holidayMap.has(date) ? 'sunday' : ''} ${d.getDay() === 6 ? 'saturday' : ''} ${holidayMap.has(date) ? 'holiday-head' : ''}`}><span>{weekdays[d.getDay()]}</span><b>{i + 1}</b></th> })}<th className="total-col">합계</th></tr></thead><tbody>{activeEmployees.map((employee, row) => {
                 const own = user.role === 'employee' && employee.id === user.employeeId
@@ -249,16 +281,18 @@ function App() {
                 const opens = shifts.filter(s => s.employeeId === employee.id && s.code === 'open').length
                 const closes = shifts.filter(s => s.employeeId === employee.id && s.code === 'close').length
                 return <tr key={employee.id} className={own ? 'own-row' : ''}><th className="staff-cell"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b></span></th>{Array.from({ length: dayCount }, (_, i) => {
-                  const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const warning = issues.some(item => item.date === date); const hours = shift && shift.code !== 'off' ? (isAdmin ? settings.shiftTimes[shift.code][shift.employmentType === '계약직' ? 'contract' : 'regular'] : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null
-                  return <td key={i} className={`${d.getDay() === 0 ? 'sunday-col' : ''} ${d.getDay() === 6 ? 'saturday-col' : ''} ${holidayMap.has(date) ? 'holiday-col' : ''} ${warning ? 'warning-cell' : ''}`}><button disabled={!isAdmin} className={`shift-chip ${shift?.code ? `shift-${shift.code}` : 'shift-empty'} ${request ? 'has-request' : ''}`} title={`${shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '미정'}${hours ? ` · ${hours.start}–${hours.end}` : ''}${request ? ' · 희망휴무 신청' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '·'}{request && <i/>}</button></td>
-                })}<td className="totals-cell"><b>{rest}</b><span><i className="total-open-dot"/>{opens}</span><span><i className="total-close-dot"/>{closes}</span></td></tr>
+                  const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const approvedHope = isApprovedHopeVisible(date, request); const warning = issues.some(item => item.date === date); const hours = shift && shift.code !== 'off' ? (isAdmin ? settings.shiftTimes[shift.code][shift.employmentType === '계약직' ? 'contract' : 'regular'] : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null
+                  return <td key={i} className={`${d.getDay() === 0 ? 'sunday-col' : ''} ${d.getDay() === 6 ? 'saturday-col' : ''} ${holidayMap.has(date) ? 'holiday-col' : ''} ${warning ? 'warning-cell' : ''}`}><button disabled={!isAdmin || isLockedDate(date) || Boolean(shift?.locked)} className={`shift-chip ${shift?.code ? `shift-${shift.code}` : 'shift-empty'} ${request ? 'has-request' : ''} ${approvedHope ? 'has-approved-hope' : ''} ${isLockedDate(date) || shift?.locked ? 'is-locked' : ''}`} title={`${shift?.locked ? '입력 확정 · 수정 불가 · ' : isLockedDate(date) ? '지난 날짜 고정 · ' : ''}${shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '미정'}${hours ? ` · ${hours.start}–${hours.end}` : ''}${request ? ` · ${employee.name} ${request.status === 'approved' ? '희망휴무 승인' : '희망휴무 신청'}` : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '·'}{shift?.locked && <span className="cell-lock-mark">고정</span>}{approvedHope && <span className="cell-hope-mark">희망</span>}{request && !approvedHope && <i/>}</button></td>
+                })}<td className={`totals-cell ${rest !== restTarget ? 'rest-mismatch' : ''}`}><b title="휴무일수">{rest}</b><span><i className="total-open-dot"/>{opens}</span><span><i className="total-close-dot"/>{closes}</span>{isAdmin && <small className="rest-comparison">기준 {restTarget} / {rest === restTarget ? '정상' : rest < restTarget ? `부족 ${restTarget - rest}` : `초과 ${rest - restTarget}`}</small>}</td></tr>
               })}</tbody></table></div>}
-              {viewMode === 'calendar' && <div className="month-calendar"><div className="calendar-weekdays">{weekdays.map((weekday, i) => <span className={i === 0 ? 'sunday' : i === 6 ? 'saturday' : ''} key={weekday}>{weekday}</span>)}</div><div className="calendar-grid">{Array.from({ length: calendarLead }, (_, i) => <div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({ length: dayCount }, (_, i) => { const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const holiday = holidayMap.get(date); const dayIssues = issues.filter(item => item.date === date); return <article key={date} className={`calendar-day ${d.getDay() === 0 || holiday ? 'calendar-sunday' : ''} ${d.getDay() === 6 ? 'calendar-saturday' : ''} ${dayIssues.length ? 'calendar-day-warning' : ''}`}><header><b>{i + 1}</b>{holiday && <span>{holiday}</span>}{dayIssues.length > 0 && isAdmin && <small>{dayIssues.length}건 확인</small>}</header>{([['open', '오픈'], ['close', '마감'], ['off', '휴무']] as const).map(([code, label]) => { const assigned = activeEmployees.filter(employee => shiftMap.get(`${employee.id}:${date}`)?.code === code); return <div className="calendar-shift-group" key={code}><span className={`calendar-shift-label ${code}`}>{label}</span><div className="calendar-staff">{assigned.map(employee => { const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.some(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); return <button key={employee.id} type="button" disabled={!isAdmin} title={`${employee.name} · ${label}${request ? ' · 희망휴무 신청' : ''}`} className={`calendar-person shift-${code} ${request ? 'has-request' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}>{employee.name}{request && <i/>}</button> })}{assigned.length === 0 && <small className="calendar-empty">—</small>}</div></div>})}</article> })}</div></div>}
-              {viewMode === 'table' && <div className="mobile-days">{Array.from({ length: dayCount }, (_, i) => { const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const holiday = holidayMap.get(date); const dayIssues = issues.filter(item => item.date === date); return <article className={`mobile-day ${dayIssues.length ? 'mobile-day-warning' : ''}`} key={date}><header><b>{i + 1}</b><span className={holiday || d.getDay() === 0 ? 'sunday' : d.getDay() === 6 ? 'saturday' : ''}>{weekdays[d.getDay()]}</span>{holiday && <em>{holiday}</em>}<small>{dayIssues.length && isAdmin ? `확인 ${dayIssues.length}건` : ''}</small></header><div className="mobile-people">{activeEmployees.map((employee, index) => { const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.some(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const own = user.role === 'employee' && employee.id === user.employeeId; const hours = shift && shift.code !== 'off' ? (isAdmin ? settings.shiftTimes[shift.code][shift.employmentType === '계약직' ? 'contract' : 'regular'] : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null; return <button key={employee.id} disabled={!isAdmin} className={`mobile-person ${own ? 'own-person' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}><span className={`staff-avatar tone-${index % 5}`}>{employee.name.slice(-1)}</span><span className="mobile-name">{employee.name}{own && <em>나</em>}{request && <i className="request-dot"/>}</span><span className={`mobile-shift ${shift ? `shift-${shift.code}` : 'shift-empty'}`}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '미정'}{hours && <small>{hours.start}–{hours.end}</small>}</span></button> })}</div>{dayIssues.length > 0 && isAdmin && <p className="mobile-warning">확인: {dayIssues.map(item => item.text).join(' · ')}</p>}</article> })}</div>}
+              {viewMode === 'calendar' && <div className="month-calendar"><div className="calendar-weekdays">{weekdays.map((weekday, i) => <span className={i === 0 ? 'sunday' : i === 6 ? 'saturday' : ''} key={weekday}>{weekday}</span>)}</div><div className="calendar-grid">{Array.from({ length: calendarLead }, (_, i) => <div className="calendar-blank" key={`blank-${i}`}/>)}{Array.from({ length: dayCount }, (_, i) => { const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const holiday = holidayMap.get(date); const dayIssues = issues.filter(item => item.date === date); return <article key={date} className={`calendar-day ${d.getDay() === 0 || holiday ? 'calendar-sunday' : ''} ${d.getDay() === 6 ? 'calendar-saturday' : ''} ${dayIssues.length ? 'calendar-day-warning' : ''}`}><header><b>{i + 1}</b>{holiday && <span>{holiday}</span>}{dayIssues.length > 0 && isAdmin && <small>{dayIssues.length}건 확인</small>}</header>{([['open', '오픈'], ['close', '마감'], ['off', '휴무']] as const).map(([code, label]) => { const assigned = activeEmployees.filter(employee => shiftMap.get(`${employee.id}:${date}`)?.code === code); return <div className="calendar-shift-group" key={code}><span className={`calendar-shift-label ${code}`}>{label}</span><div className="calendar-staff">{assigned.map(employee => { const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const approvedHope = isApprovedHopeVisible(date, request); return <button key={employee.id} type="button" disabled={!isAdmin || isLockedDate(date) || Boolean(shift?.locked)} title={`${employee.name} · ${label}${shift?.locked ? ' · 입력 확정 · 수정 불가' : isLockedDate(date) ? ' · 지난 날짜 고정' : ''}${request ? ` · ${employee.name} ${request.status === 'approved' ? '희망휴무 승인' : '희망휴무 신청'}` : ''}`} className={`calendar-person shift-${code} ${request ? 'has-request' : ''} ${isLockedDate(date) || shift?.locked ? 'is-locked' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}>{employee.name}{shift?.locked && <span> · 고정</span>}{approvedHope && <span className="approved-hope-label">희망</span>}{request && !approvedHope && <i/>}</button> })}{assigned.length === 0 && <small className="calendar-empty">—</small>}</div></div>})}</article> })}</div></div>}
+              {viewMode === 'table' && <div className="mobile-days">{Array.from({ length: dayCount }, (_, i) => { const d = new Date(month.getFullYear(), month.getMonth(), i + 1); const date = dateKey(d); const holiday = holidayMap.get(date); const dayIssues = issues.filter(item => item.date === date); return <article className={`mobile-day ${dayIssues.length ? 'mobile-day-warning' : ''}`} key={date}><header><b>{i + 1}</b><span className={holiday || d.getDay() === 0 ? 'sunday' : d.getDay() === 6 ? 'saturday' : ''}>{weekdays[d.getDay()]}</span>{holiday && <em>{holiday}</em>}<small>{dayIssues.length && isAdmin ? `확인 ${dayIssues.length}건` : ''}</small></header><div className="mobile-people">{activeEmployees.map((employee, index) => { const shift = shiftMap.get(`${employee.id}:${date}`); const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected'); const approvedHope = isApprovedHopeVisible(date, request); const own = user.role === 'employee' && employee.id === user.employeeId; const hours = shift && shift.code !== 'off' ? (isAdmin ? settings.shiftTimes[shift.code][shift.employmentType === '계약직' ? 'contract' : 'regular'] : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null; return <button key={employee.id} disabled={!isAdmin || isLockedDate(date) || Boolean(shift?.locked)} title={`${employee.name}${request ? ` · ${request.status === 'approved' ? '희망휴무 승인' : '희망휴무 신청'}` : ''}${shift?.locked ? ' · 입력 확정 · 수정 불가' : isLockedDate(date) ? ' · 지난 날짜 고정' : ''}`} className={`mobile-person ${own ? 'own-person' : ''} ${shift?.locked ? 'is-entry-locked' : ''}`} onClick={() => isAdmin && void saveShift(employee.id, i + 1, cycleShift(shift))}><span className={`staff-avatar tone-${index % 5}`}>{employee.name.slice(-1)}</span><span className="mobile-name">{employee.name}{own && <em>나</em>}{approvedHope && <small className="approved-hope-label">희망</small>}{request && !approvedHope && <i className="request-dot"/>}</span><span className={`mobile-shift ${shift ? `shift-${shift.code}` : 'shift-empty'}`}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'off' ? '휴무' : '미정'}{shift?.locked && <small>고정</small>}{hours && <small>{hours.start}–{hours.end}</small>}</span></button> })}</div>{dayIssues.length > 0 && isAdmin && <p className="mobile-warning">확인: {dayIssues.map(item => item.text).join(' · ')}</p>}</article> })}</div>}
             </>}
-            {isAdmin && issues.length > 0 && <div className="issue-panel"><div><b>확인이 필요한 항목</b><span>{issues.length}건</span></div>{issues.slice(0, 6).map((issue, i) => <p key={`${issue.text}-${i}`}><i/> {issue.text}</p>)}</div>}
+            {isAdmin && (issues.length > 0 || requestWarnings.length > 0) && <div className="issue-panel"><div><b>확인이 필요한 항목</b><span>{issues.length}건</span></div>{[...issues, ...requestWarnings].map((issue, i) => <p key={`${issue.text}-${i}`}><i/> {issue.text}</p>)}</div>}
             <footer className="schedule-footer"><span>{isAdmin ? '근무시간은 직원 설정에 따라 표시됩니다. 확정 전 경고를 확인해 주세요.' : '근무 일정 문의나 변경 요청은 관리자에게 전달해 주세요.'}</span>{isAdmin && <button className="button button-confirm" disabled={confirmed} onClick={() => void confirmSchedule()}>{confirmed ? '근무표 확정됨' : '근무표 확정'} <Icon name="arrow" size={16}/></button>}</footer>
           </section>
+          {isAdmin && photoImport?.month === monthKey(month) && (photoImport.entries.length > 0 || photoImport.notes.length > 0) && <section className="settings-section photo-import-panel"><h2>사진 근무표 반영</h2><p>읽을 수 있는 근무 {photoImport.entries.length}건을 반영했습니다. 원본과 비교해 필요한 칸을 수정한 뒤 확인 완료를 눌러 주세요.</p><div className="photo-import-notes">{photoImport.notes.map(note => <article key={note.id} className={note.resolved ? 'resolved-note' : ''}><div><b>{Number(note.date.slice(-2))}일</b><span>{note.text}</span></div><button className="button button-quiet" onClick={() => void resolvePhotoNote(note.id, !note.resolved)}>{note.resolved ? '확인 완료 · 되돌리기' : '확인 완료'}</button></article>)}</div></section>}
+
         </>}
 
         {page === 'requests' && <>
@@ -285,9 +319,9 @@ function App() {
         {page === 'settings' && isAdmin && <>
           <div className="page-heading"><div><h1>운영 설정</h1><p>근무시간과 일정 편성 조건을 관리합니다.</p></div><button className="button button-primary" onClick={() => void saveSettings(settings)}>설정 저장</button></div>
           <div className="settings-layout"><section className="settings-section"><div className="section-heading"><div><h2>오픈 · 마감 시간</h2></div><span className="section-emblem"><Icon name="clock" size={22}/></span></div><div className="times-grid"><div className="time-header"><span>유형</span><span>구분</span><span>시작</span><span>종료</span></div>{(['open', 'close'] as const).flatMap(type => (['regular', 'contract'] as const).map((kind, i) => <div className="time-line" key={`${type}-${kind}`}><b>{i === 0 ? type === 'open' ? '오픈' : '마감' : ''}</b><span>{kind === 'regular' ? '정규직' : '계약직'}</span><input type="time" aria-label={`${type} ${kind} 시작시간`} value={settings.shiftTimes[type][kind].start} onChange={e => setSettings(value => ({ ...value, shiftTimes: { ...value.shiftTimes, [type]: { ...value.shiftTimes[type], [kind]: { ...value.shiftTimes[type][kind], start: e.target.value } } } }))}/><input type="time" aria-label={`${type} ${kind} 종료시간`} value={settings.shiftTimes[type][kind].end} onChange={e => setSettings(value => ({ ...value, shiftTimes: { ...value.shiftTimes, [type]: { ...value.shiftTimes[type], [kind]: { ...value.shiftTimes[type][kind], end: e.target.value } } } }))}/></div>))}</div><p className="setting-help">근무표에는 직원 구분에 맞는 시간이 표시됩니다.</p></section>
-            <section className="settings-section"><div className="section-heading"><div><h2>동시 휴무 제한</h2></div><span className="section-emblem"><span className="pair-glyph">↔</span></span></div><p className="settings-intro">같은 날 휴무로 편성할 수 없는 직원 조합</p><div className="pair-list">{settings.daysOffPairs.map((pair, index) => <div className="pair-line" key={index}><b>{employees.find(e => e.id === pair.employeeIds[0])?.name ?? '직원'}</b><span>함께 쉬지 않도록</span><b>{employees.find(e => e.id === pair.employeeIds[1])?.name ?? '직원'}</b><button onClick={() => setSettings(value => ({ ...value, daysOffPairs: value.daysOffPairs.filter((_, i) => i !== index) }))}>삭제</button></div>)}{settings.daysOffPairs.length === 0 && <p className="no-pairs">등록된 제한이 없습니다.</p>}<PairAdder employees={activeEmployees} onAdd={pair => setSettings(value => ({ ...value, daysOffPairs: [...value.daysOffPairs, { employeeIds: pair }] }))} existing={settings.daysOffPairs}/></div><p className="setting-help">자동 편성 시 가능한 범위에서 제한을 지키며, 어려운 항목은 경고로 알려드립니다.</p></section>
+            <section className="settings-section"><div className="section-heading"><div><h2>동시 휴무 제한</h2></div><span className="section-emblem"><span className="pair-glyph">↔</span></span></div><p className="settings-intro">같은 날 휴무로 편성할 수 없는 직원 조합</p><div className="pair-list">{settings.daysOffPairs.map((pair, index) => <div className="pair-line" key={index}><b>{employees.find(e => e.id === pair.employeeIds[0])?.name ?? '직원'}</b><span>함께 쉬지 않도록</span><b>{employees.find(e => e.id === pair.employeeIds[1])?.name ?? '직원'}</b><button onClick={() => setSettings(value => ({ ...value, daysOffPairs: value.daysOffPairs.filter((_, i) => i !== index) }))}>삭제</button></div>)}{settings.daysOffPairs.length === 0 && <p className="no-pairs">등록된 제한이 없습니다.</p>}<PairAdder employees={activeEmployees} onAdd={pair => setSettings(value => ({ ...value, daysOffPairs: [...value.daysOffPairs, { employeeIds: pair }] }))} existing={settings.daysOffPairs}/></div><p className="setting-help">자동 편성과 확정 시 반드시 검사합니다. 제한을 위반하는 자동편성 결과는 저장하지 않습니다.</p></section>
             <section className="settings-section holiday-settings"><div className="section-heading"><div><h2>공휴일 · 기준 휴무</h2></div><span className="section-emblem"><Icon name="calendar" size={22}/></span></div><div className="holiday-count"><b>{restTarget}<small>일</small></b><span>{monthLabel(month)} 직원별 기준 휴무<br/><button onClick={() => changeMonth(-1)}>‹ 이전 달</button><button onClick={() => changeMonth(1)}>다음 달 ›</button></span></div><div className="holiday-list">{holidays.filter(item => item.date.startsWith(monthKey(month))).map(item => <div key={item.date}><span>{item.date.slice(5).replace('-', '월 ')}일</span><b>{item.name}</b>{settings.additionalHolidays.includes(item.date) && <button onClick={() => void saveSettings({ ...settings, additionalHolidays: settings.additionalHolidays.filter(date => date !== item.date) })}>삭제</button>}</div>)}{holidays.filter(item => item.date.startsWith(monthKey(month))).length === 0 && <p className="no-pairs">이번 달 공휴일이 없습니다.</p>}</div><div className="add-holiday"><input type="date" value={holidayDate} onChange={e => setHolidayDate(e.target.value)}/><button disabled={!holidayDate} onClick={() => void addHoliday()}>추가</button></div><p className="setting-help">주말과 공휴일을 합쳐 휴무 기준을 계산합니다.</p></section>
-            <section className="settings-section planning-rules"><div className="section-heading"><div><h2>적용 순서</h2></div><span className="section-emblem"><Icon name="spark" size={20}/></span></div><ol><li>승인된 희망휴무를 먼저 반영</li><li>직원별 기준 휴무일수에 맞춰 배정</li><li>동시휴무 제한과 근무 인원을 고려</li><li>오픈과 마감 횟수를 균형 있게 배분</li><li>조건 충돌이 남으면 일정을 만들고 확인 알림 표시</li></ol></section>
+            <section className="settings-section planning-rules"><div className="section-heading"><div><h2>편성 기준</h2></div><span className="section-emblem"><Icon name="spark" size={20}/></span></div><ol><li>정기휴무·가능한 근무와 기존 고정 배정 적용</li><li>월 기준 휴무일수는 지키고 주별로 고르게 분산</li><li>평일 5명·주말/공휴일 4명을 목표로 편성하고, 어려우면 평일 4명·주말/공휴일 3명까지 확보</li><li>매일 오픈·마감 인원을 가능한 한 균형 있게 배분하고 직원별 횟수도 고르게 조정</li><li>오픈·마감 정규직 배치를 최대한 반영</li><li>필수조건 안에서 승인·희망휴무를 반영</li><li>완화 기준 미달 날짜만 확인 항목에 표시</li></ol></section>
           </div>
         </>}
       </div>
@@ -301,7 +335,7 @@ function App() {
 }
 
 function AuthScreen({ setup, error, onSubmit }: { setup: boolean; error: string; onSubmit: (username: string, password: string, setup: boolean) => Promise<void> }) {
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState(setup ? 'charm1596' : '')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -326,8 +360,14 @@ function EmployeeDialog({ employee, onClose, onSave, onDelete }: { employee: Emp
   const [employmentType, setEmploymentType] = useState<Employee['employmentType']>(employee?.employmentType ?? '정규직')
   const [active, setActive] = useState(employee ? isActive(employee) : true)
   const [notes, setNotes] = useState(employee?.notes ?? '')
-  const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim()) onSave({ name: name.trim(), employmentType, active, notes }, employee?.id) }
-  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><form className="dialog-card" onSubmit={submit}><header><div><h2>{employee ? '직원 정보 수정' : '새 직원 추가'}</h2></div><button type="button" className="close-button" onClick={onClose} aria-label="닫기">×</button></header><label className="form-field">직원명<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="이름 입력"/></label><label className="form-field">채용 구분<select value={employmentType} onChange={e => setEmploymentType(e.target.value as Employee['employmentType'])}><option>정규직</option><option>계약직</option></select></label><label className="form-field">재직 여부<div className="segmented-control"><button type="button" className={active ? 'selected' : ''} onClick={() => setActive(true)}>재직</button><button type="button" className={!active ? 'selected' : ''} onClick={() => setActive(false)}>퇴사</button></div></label><label className="form-field">특이사항 / 근무 조건<textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="근무 조건을 입력하세요"/></label><footer>{employee && <button type="button" className="delete-button" onClick={() => onDelete(employee)}>직원 삭제</button>}<div><button type="button" className="button button-quiet" onClick={onClose}>취소</button><button className="button button-primary">저장</button></div></footer></form></div>
+  const [workRules, setWorkRules] = useState<WorkRules>(employee?.workRules ?? { allowedShifts: ['open', 'close'], offRules: [] })
+  const toggleOff = (weekday: number, occurrence: number) => setWorkRules(value => {
+    const selected = value.offRules.find(rule => rule.weekday === weekday)?.occurrences ?? []
+    const occurrences = selected.includes(occurrence) ? selected.filter(n => n !== occurrence) : [...selected, occurrence].sort()
+    return { ...value, offRules: [...value.offRules.filter(rule => rule.weekday !== weekday), ...(occurrences.length ? [{ weekday, occurrences }] : [])] }
+  })
+  const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim()) onSave({ name: name.trim(), employmentType, active, notes, workRules }, employee?.id) }
+  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><form className="dialog-card" onSubmit={submit}><header><div><h2>{employee ? '직원 정보 수정' : '새 직원 추가'}</h2></div><button type="button" className="close-button" onClick={onClose} aria-label="닫기">×</button></header><label className="form-field">직원명<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="이름 입력"/></label><label className="form-field">채용 구분<select value={employmentType} onChange={e => setEmploymentType(e.target.value as Employee['employmentType'])}><option>정규직</option><option>계약직</option></select></label><label className="form-field">재직 여부<div className="segmented-control"><button type="button" className={active ? 'selected' : ''} onClick={() => setActive(true)}>재직</button><button type="button" className={!active ? 'selected' : ''} onClick={() => setActive(false)}>퇴사</button></div></label><label className="form-field">특이사항 (메모)<textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} placeholder="설명용 메모. 근무 제한은 아래에서 선택하세요."/></label><label className="form-field">가능한 근무<select value={workRules.allowedShifts.length === 2 ? 'both' : workRules.allowedShifts[0]} onChange={e => setWorkRules(value => ({ ...value, allowedShifts: e.target.value === 'both' ? ['open', 'close'] : [e.target.value as 'open' | 'close'] }))}><option value="both">오픈·마감 모두 가능</option><option value="open">오픈만 가능</option><option value="close">마감만 가능</option></select></label><fieldset className="recurring-rules"><legend>정기휴무 · 매월 몇 번째 요일</legend><p>정기휴무를 설정할 수 있습니다. 월 기준 휴무는 지키고 쉬는 날은 주별로 고르게 나눕니다.</p>{weekdays.map((weekday, day) => <div className="recurring-row" key={day}><b>{weekday}</b>{[1, 2, 3, 4, 5].map(n => <label key={n}><input type="checkbox" aria-label={`${weekday}요일 ${n}번째 정기휴무`} checked={workRules.offRules.some(rule => rule.weekday === day && rule.occurrences.includes(n))} onChange={() => toggleOff(day, n)}/>{n}번째</label>)}</div>)}</fieldset><footer>{employee && <button type="button" className="delete-button" onClick={() => onDelete(employee)}>직원 삭제</button>}<div><button type="button" className="button button-quiet" onClick={onClose}>취소</button><button className="button button-primary">저장</button></div></footer></form></div>
 }
 
 function AccountDialog({ employee, account, onClose, onSave }: { employee: Employee; account?: Account; onClose: () => void; onSave: (employee: Employee, username: string, password: string) => void }) {
