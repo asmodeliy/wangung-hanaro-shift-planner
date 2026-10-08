@@ -121,6 +121,16 @@ test('manager can change a named employee employment type and produce assignment
   assert.equal(update.data.produceQualified, true)
   assert.equal((await call('/api/employees')).data.find(employee => employee.id === 1).employmentType, '계약직')
 })
+test('partial saved shift-time settings are safely filled with defaults', async () => {
+  const original = (await call('/api/settings')).data
+  assert.equal((await call('/api/settings', 'PUT', { ...original, shiftTimes: {} })).status, 200)
+  const settings = (await call('/api/settings')).data
+  assert.deepEqual(settings.shiftTimes, {
+    open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
+    close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
+  })
+  assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
+})
 test('employees cannot change settings and API omits private employment rules', async () => {
   await call('/api/users/employee/1', 'PUT', { username: 'testemployee', password: 'test-password-only-employee' })
   const adminCookie = cookie

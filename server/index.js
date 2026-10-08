@@ -121,7 +121,20 @@ async function readSettings() {
     const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
     if (!row) return structuredClone(defaultSettings)
     const stored = JSON.parse(row.setting_value)
-    const settings = { ...defaultSettings, ...stored, operations: { ...defaultOperationRules, ...(stored.operations ?? {}) } }
+    const savedTimes = stored.shiftTimes && typeof stored.shiftTimes === 'object' ? stored.shiftTimes : {}
+    const mergeShiftTime = (shift, type) => {
+      const value = savedTimes[shift]?.[type]
+      return { ...defaultSettings.shiftTimes[shift][type], ...(value && typeof value === 'object' ? value : {}) }
+    }
+    const settings = {
+      ...defaultSettings,
+      ...stored,
+      shiftTimes: {
+        open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
+        close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
+      },
+      operations: { ...defaultOperationRules, ...(stored.operations ?? {}) },
+    }
     if (!await db.prepare('SELECT 1 FROM employees WHERE active = 1 AND produce_qualified = 1 LIMIT 1').get()) settings.operations.produceOpenCount = 0
     settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
     settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
@@ -466,11 +479,13 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   const settings = await readSettings()
   if (incoming.shiftTimes) {
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/
+    const shiftTimes = structuredClone(settings.shiftTimes)
     for (const shift of ['open', 'close']) for (const type of ['regular', 'contract']) {
-      const time = incoming.shiftTimes?.[shift]?.[type]
+      const time = incoming.shiftTimes?.[shift]?.[type] ?? shiftTimes[shift][type]
       if (!timePattern.test(String(time?.start ?? '')) || !timePattern.test(String(time?.end ?? ''))) return res.status(400).json({ error: '근무시간을 확인해 주세요.' })
+      shiftTimes[shift][type] = { start: time.start, end: time.end }
     }
-    settings.shiftTimes = incoming.shiftTimes
+    settings.shiftTimes = shiftTimes
   }
   if (Array.isArray(incoming.daysOffPairs)) {
     const ids = new Set((await db.prepare('SELECT id FROM employees').all()).map(row => row.id))

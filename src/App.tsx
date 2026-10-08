@@ -32,7 +32,7 @@ const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth()
 const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 const shiftTimesForEmployee = (name: string, employmentType: Employee['employmentType'], code: 'open' | 'close', settings: Settings) => {
   const type = code === 'open' && name.trim() === '정지희' ? 'regular' : employmentType === '계약직' ? 'contract' : 'regular'
-  return settings.shiftTimes[code][type]
+  return settings.shiftTimes?.[code]?.[type] ?? defaultSettings.shiftTimes[code][type]
 }
 const isApprovedHopeVisible = (date: string, request?: DayRequest) => date >= '2026-11-01' && request?.status === 'approved'
 const isLockedDate = (date: string) => date <= todayKey
