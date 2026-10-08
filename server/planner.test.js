@@ -15,6 +15,15 @@ test('baseline covers both regular shifts, exact monthly quota and weekly minimu
   const input = base()
   verify(input, await generateSchedule(input))
 })
+test('a full-day assignment covers both regular shifts and counts once as a worker', () => {
+  const input = base()
+  const date = '2026-02-05'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 1 ? 'full' : employee.id === 2 ? 'open' : employee.id === 3 ? 'close' : 'off' }))
+  const result = validateSchedule({ ...input, shifts })
+  assert.equal(result.issues.some(issue => issue.date === date && /정규직 없음/.test(issue.text)), false)
+  assert.equal(result.issues.some(issue => issue.date === date && /최소 근무인원 미충족/.test(issue.text)), false)
+  assert.equal(result.stats.find(item => item.employeeId === 1).full, 1)
+})
 test('conflicting approved wishes are adjusted without breaking simultaneous-rest rule', async () => {
   const input = { ...base(), requests: [2, 7].map(employeeId => ({ employeeId, date: '2026-02-05', status: 'approved' })) }
   const result = await generateSchedule(input)

@@ -149,7 +149,14 @@ async function readSettings() {
 }
 function shiftTimesForEmployee(name, employmentType, code, settings) {
   const type = code === 'open' && String(name ?? '').trim() === '정지희' ? 'regular' : employmentType === '계약직' ? 'contract' : 'regular'
-  return settings.shiftTimes[code][type]
+  if (code === 'full') {
+    const openType = String(name ?? '').trim() === '정지희' ? 'regular' : type
+    return {
+      start: settings?.shiftTimes?.open?.[openType]?.start ?? defaultSettings.shiftTimes.open[openType].start,
+      end: settings?.shiftTimes?.close?.[type]?.end ?? defaultSettings.shiftTimes.close[type].end,
+    }
+  }
+  return settings?.shiftTimes?.[code]?.[type] ?? defaultSettings.shiftTimes[code][type]
 }
 async function saveSettings(value) {
   await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run('main', JSON.stringify(value))
@@ -531,19 +538,20 @@ app.get('/api/holidays', async (req, res) => {
 app.get('/api/shifts', async (req, res) => {
   const month = String(req.query.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식은 YYYY-MM이어야 합니다.' })
-  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
+  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.produce_qualified AS produceQualified, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
     FROM shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_locks l ON l.employee_id = s.employee_id AND l.shift_date = s.shift_date WHERE s.shift_date >= ? AND s.shift_date < ? ORDER BY s.shift_date, e.sort_order, e.id`)
     .all(`${month}-01`, `${nextMonth(month)}-01`)
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = await readSettings()
-  res.json(rows.map(({ employmentType, locked, ...row }) => {
+  res.json(rows.map(({ employmentType, produceQualified, locked, ...row }) => {
     const times = row.code === 'off' ? null : shiftTimesForEmployee(row.employeeName, employmentType, row.code, settings)
+    if (row.code === 'full' && produceQualified) times.start = '08:00'
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })
 app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
-  if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
+  if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
   if (date <= seoulDateKey()) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
   if (!await db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
@@ -753,7 +761,7 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     const input = { ...await planningInput(month), mode, lockedThroughDate: seoulDateKey() }
     const dates = new Set(monthDates(month))
     const employeeIds = new Set(input.employees.map(employee => employee.id))
-    if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
+    if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'full', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
     if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
     const issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.text.includes('미편성'))
     if (issues.length) return res.status(422).json({ error: '편성안에 미입력된 칸이 있습니다.' })
