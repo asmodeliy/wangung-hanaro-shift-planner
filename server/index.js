@@ -3,9 +3,9 @@ import Holidays from 'date-holidays'
 import express from 'express'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
-import { defaultRules, normalizeRules, validDate, monthDates, weekDates, validateSchedule, seoulDateKey } from './planner.js'
+import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -13,7 +13,10 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data')
 mkdirSync(dataDir, { recursive: true })
-const db = new Database(path.join(dataDir, 'shift-planner.sqlite'))
+const databasePath = path.join(dataDir, 'shift-planner.sqlite')
+const seedDatabasePath = process.env.SEED_DATABASE_PATH ? path.resolve(root, process.env.SEED_DATABASE_PATH) : ''
+if (!existsSync(databasePath) && seedDatabasePath && existsSync(seedDatabasePath)) copyFileSync(seedDatabasePath, databasePath)
+const db = new Database(databasePath)
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 db.exec(`
@@ -21,6 +24,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     employment_type TEXT NOT NULL DEFAULT '정규직',
+    duty_type TEXT NOT NULL DEFAULT 'support',
+    produce_qualified INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -68,13 +73,29 @@ db.exec(`
 `)
 
 const employeeCount = db.prepare('SELECT COUNT(*) AS n FROM employees').get().n
-if (!db.prepare('PRAGMA table_info(employees)').all().some(column => column.name === 'work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
+const employeeColumns = new Set(db.prepare('PRAGMA table_info(employees)').all().map(column => column.name))
+if (!employeeColumns.has('work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
+if (!employeeColumns.has('duty_type')) db.exec("ALTER TABLE employees ADD COLUMN duty_type TEXT NOT NULL DEFAULT 'support'")
+if (!employeeColumns.has('produce_qualified')) db.exec('ALTER TABLE employees ADD COLUMN produce_qualified INTEGER NOT NULL DEFAULT 0')
+const rosterProfiles = new Map([
+  ['진해경', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
+  ['이화진', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
+  ['차용호', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
+  ['정지희', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
+  ['김효섭', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
+  ['최창섭', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
+  ['김은주', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
+])
+function rosterProfile(name) { return rosterProfiles.get(String(name ?? '').trim()) }
+const updateKnownProfile = db.prepare('UPDATE employees SET employment_type = ?, duty_type = ?, produce_qualified = ? WHERE trim(name) = ? AND (employment_type != ? OR duty_type != ? OR produce_qualified != ?)')
+let rosterProfileChanges = 0
+db.transaction(() => { for (const [name, profile] of rosterProfiles) rosterProfileChanges += updateKnownProfile.run(profile.employmentType, profile.dutyType, profile.produceQualified, name, profile.employmentType, profile.dutyType, profile.produceQualified).changes })()
 // Public demo seeds contain no personal employee information. Existing local data is preserved.
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
   const seed = existsSync(seedPath) ? JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')) : Array.from({ length: 7 }, (_, index) => ({ name: `직원 ${String.fromCharCode(65 + index)}`, employmentType: '정규직' }))
-  const insert = db.prepare('INSERT INTO employees (name, employment_type, work_rules, sort_order) VALUES (?, ?, ?, ?)')
-  db.transaction(() => seed.forEach((employee, index) => insert.run(employee.name, employee.employmentType, JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index)))()
+  const insert = db.prepare('INSERT INTO employees (name, employment_type, duty_type, produce_qualified, work_rules, sort_order) VALUES (?, ?, ?, ?, ?, ?)')
+  db.transaction(() => seed.forEach((employee, index) => { const profile = rosterProfile(employee.name); insert.run(employee.name, profile?.employmentType ?? employee.employmentType, profile?.dutyType ?? (employee.dutyType === 'functional' ? 'functional' : employee.dutyType === 'other' ? 'other' : 'support'), profile?.produceQualified ?? (employee.produceQualified ? 1 : 0), JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index) }))()
 }
 
 const defaultSettings = {
@@ -82,7 +103,7 @@ const defaultSettings = {
     open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
   },
-  daysOffPairs: [], additionalHolidays: [], confirmedMonths: [], weeklyRestPolicy: 'minimum',
+  daysOffPairs: [], additionalHolidays: [], confirmedMonths: [], weeklyRestPolicy: 'minimum', operations: { ...defaultOperationRules },
 }
 if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main')) {
   const settings = structuredClone(defaultSettings)
@@ -90,16 +111,36 @@ if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main'))
   if (existsSync(seedPath)) Object.assign(settings, JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')))
   db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)').run('main', JSON.stringify(settings))
 }
+if (rosterProfileChanges > 0) {
+  const row = db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
+  const settings = JSON.parse(row.setting_value)
+  if (Array.isArray(settings.confirmedMonths) && settings.confirmedMonths.length) {
+    settings.confirmedMonths = []
+    db.prepare('UPDATE app_settings SET setting_value = ? WHERE setting_key = ?').run(JSON.stringify(settings), 'main')
+  }
+}
 function readSettings() {
-  try { return { ...defaultSettings, ...JSON.parse(db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main').setting_value) } }
+  try {
+    const stored = JSON.parse(db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main').setting_value)
+    const settings = { ...defaultSettings, ...stored, operations: { ...defaultOperationRules, ...(stored.operations ?? {}) } }
+    if (!db.prepare('SELECT 1 FROM employees WHERE active = 1 AND produce_qualified = 1 LIMIT 1').get()) settings.operations.produceOpenCount = 0
+    settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
+    const substituteIds = ['김효섭', '최창섭'].map(name => db.prepare('SELECT id FROM employees WHERE trim(name) = ? AND active = 1 ORDER BY sort_order,id LIMIT 1').get(name)?.id)
+    if (substituteIds.every(Number.isInteger) && !settings.daysOffPairs.some(pair => pair.employeeIds?.length === 2 && substituteIds.every(id => pair.employeeIds.includes(id)))) settings.daysOffPairs.push({ employeeIds: substituteIds })
+    return settings
+  }
   catch { return structuredClone(defaultSettings) }
+}
+function shiftTimesForEmployee(name, employmentType, code, settings = readSettings()) {
+  const type = code === 'open' && String(name ?? '').trim() === '정지희' ? 'regular' : employmentType === '계약직' ? 'contract' : 'regular'
+  return settings.shiftTimes[code][type]
 }
 function saveSettings(value) {
   db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run('main', JSON.stringify(value))
 }
 function invalidateConfirmed() { const settings = readSettings(); settings.confirmedMonths = []; saveSettings(settings) }
 function activeEmployees() {
-  return db.prepare('SELECT id, name, employment_type AS employmentType, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, workRules: JSON.parse(work_rules) }))
+  return db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all().map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
 }
 function holidaysFor(year, settings = readSettings()) {
   const holidays = new Holidays('KR').getHolidays(year).filter(item => item.type === 'public').map(item => ({ date: item.date.slice(0, 10), name: item.name }))
@@ -226,7 +267,7 @@ app.put('/api/auth/password', (req, res) => {
 
 app.get('/api/employees', (req, res) => {
   const rows = req.user.role === 'admin'
-    ? db.prepare('SELECT id, name, employment_type AS employmentType, active, notes, work_rules FROM employees ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, workRules: JSON.parse(work_rules) }))
+    ? db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees ORDER BY sort_order, id').all().map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
     : db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
 })
@@ -255,28 +296,39 @@ app.patch('/api/reference-schedule/import/:id', requireAdmin, (req, res) => {
   res.json({ ok: true })
 })
 app.post('/api/employees', requireAdmin, (req, res) => {
-  const { name, employmentType = '정규직', active = true, notes = '', workRules = defaultRules } = req.body ?? {}
-  if (!String(name ?? '').trim()) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
+  const body = req.body ?? {}
+  const name = String(body.name ?? '').trim()
+  const profile = rosterProfile(name)
+  const employmentType = profile?.employmentType ?? body.employmentType ?? '정규직'
+  const dutyType = profile?.dutyType ?? body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = profile ? Boolean(profile.produceQualified) : body.produceQualified ?? false
+  const { active = true, notes = '', workRules = defaultRules } = body
+  if (!name) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
   if (!['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(workRules) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = db.prepare(`INSERT INTO employees (name, employment_type, active, notes, work_rules, sort_order)
-    VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
+  const result = db.prepare(`INSERT INTO employees (name, employment_type, duty_type, produce_qualified, active, notes, work_rules, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
   invalidateConfirmed()
-  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, active, notes, workRules: rules })
+  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
 })
 app.put('/api/employees/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id)
   const { name, employmentType, active, notes } = req.body ?? {}
   if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
-  const existing = db.prepare('SELECT work_rules FROM employees WHERE id = ?').get(id)
+  const existing = db.prepare('SELECT work_rules, duty_type, produce_qualified FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
+  const profile = rosterProfile(name)
+  const dutyType = profile?.dutyType ?? req.body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = profile ? Boolean(profile.produceQualified) : req.body.produceQualified ?? false
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(req.body.workRules ?? JSON.parse(existing.work_rules)) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = db.prepare('UPDATE employees SET name = ?, employment_type = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
+  const result = db.prepare('UPDATE employees SET name = ?, employment_type = ?, duty_type = ?, produce_qualified = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
   if (!result.changes) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   invalidateConfirmed()
-  res.json({ id, name, employmentType, active, notes, workRules: rules })
+  res.json({ id, name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
 })
 app.delete('/api/employees/:id', requireAdmin, (req, res) => {
   const result = db.prepare('DELETE FROM employees WHERE id = ?').run(Number(req.params.id))
@@ -287,6 +339,39 @@ app.delete('/api/employees/:id', requireAdmin, (req, res) => {
 
 app.get('/api/users', requireAdmin, (_req, res) => res.json(db.prepare(`SELECT u.id, u.username, u.role, u.employee_id AS employeeId, e.name AS employeeName
   FROM users u LEFT JOIN employees e ON e.id = u.employee_id ORDER BY u.role, e.sort_order, u.username`).all()))
+app.post('/api/users/admin', requireAdmin, (req, res) => {
+  const username = String(req.body?.username ?? '').trim()
+  const password = String(req.body?.password ?? '')
+  if (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n >= 2) return res.status(409).json({ error: '관리자 계정은 최대 2개까지 만들 수 있습니다.' })
+  if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) return res.status(400).json({ error: '아이디는 영문, 숫자, 점, 밑줄, 하이픈으로 3~32자 입력해 주세요.' })
+  if (password.length < 10 || password.length > 128) return res.status(400).json({ error: '비밀번호는 10~128자로 입력해 주세요.' })
+  try {
+    const result = db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(username, hashPassword(password), 'admin')
+    res.status(201).json({ id: Number(result.lastInsertRowid), username, role: 'admin', employeeId: null, employeeName: null })
+  } catch (error) {
+    if (String(error?.code).includes('CONSTRAINT')) return res.status(409).json({ error: '이미 사용 중인 아이디입니다.' })
+    throw error
+  }
+})
+app.put('/api/users/admin/:id/password', requireAdmin, (req, res) => {
+  const id = Number(req.params.id)
+  const password = String(req.body?.password ?? '')
+  if (!Number.isInteger(id) || id === req.user.id) return res.status(400).json({ error: '다른 관리자 계정을 선택해 주세요.' })
+  if (password.length < 10 || password.length > 128) return res.status(400).json({ error: '비밀번호는 10~128자로 입력해 주세요.' })
+  const result = db.prepare("UPDATE users SET password_hash = ? WHERE id = ? AND role = 'admin'").run(hashPassword(password), id)
+  if (!result.changes) return res.status(404).json({ error: '관리자 계정을 찾을 수 없습니다.' })
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
+  res.json({ ok: true })
+})
+app.delete('/api/users/admin/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id)) return res.status(400).json({ error: '관리자 계정을 확인해 주세요.' })
+  if (id === req.user.id) return res.status(409).json({ error: '현재 로그인한 관리자 계정은 여기서 삭제할 수 없습니다.' })
+  if (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n <= 1) return res.status(409).json({ error: '관리자 계정은 최소 한 개 이상 유지해야 합니다.' })
+  const result = db.prepare("DELETE FROM users WHERE id = ? AND role = 'admin'").run(id)
+  if (!result.changes) return res.status(404).json({ error: '관리자 계정을 찾을 수 없습니다.' })
+  res.status(204).end()
+})
 app.put('/api/users/employee/:employeeId', requireAdmin, (req, res) => {
   const employeeId = Number(req.params.employeeId)
   const username = String(req.body?.username ?? '').trim()
@@ -336,6 +421,18 @@ app.put('/api/settings', requireAdmin, (req, res) => {
   }
   if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
   if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
+  if (incoming.operations !== undefined) {
+    const operations = incoming.operations
+    const ranges = {
+      weekdayTarget: [1, 20], weekendTarget: [1, 20], weekdayMinimum: [1, 20], weekendMinimum: [1, 20],
+      functionalMinOnDuty: [0, 9], supportMaxOff: [0, 9], produceOpenCount: [0, 9],
+      maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 9], requestDueDay: [1, 28], publishDay: [1, 28],
+    }
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean') return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
+    for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(operations[key]) || operations[key] < min || operations[key] > max) return res.status(400).json({ error: '운영 기준의 인원 수와 날짜를 확인해 주세요.' })
+    if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), requireRegularEachShift: operations.requireRegularEachShift }
+  }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = readSettings()
   if (JSON.stringify({ ...settings, confirmedMonths: [] }) !== JSON.stringify({ ...previous, confirmedMonths: [] })) settings.confirmedMonths = []
@@ -357,7 +454,7 @@ app.get('/api/shifts', (req, res) => {
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = readSettings()
   res.json(rows.map(({ employmentType, locked, ...row }) => {
-    const times = row.code === 'off' ? null : settings.shiftTimes[row.code][employmentType === '계약직' ? 'contract' : 'regular']
+    const times = row.code === 'off' ? null : shiftTimesForEmployee(row.employeeName, employmentType, row.code, settings)
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })
@@ -387,10 +484,28 @@ app.post('/api/requests', (req, res) => {
   const employeeId = req.user.role === 'employee' ? req.user.employee_id : Number(req.body?.employeeId)
   const dates = req.body?.dates
   if (!employeeId || !Array.isArray(dates) || !dates.length || dates.length > 31 || dates.some(date => typeof date !== 'string' || !validDate(date))) return res.status(400).json({ error: '희망휴무 날짜를 확인해 주세요.' })
-  const employee = db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(employeeId)
+  const employee = db.prepare('SELECT id, duty_type AS dutyType FROM employees WHERE id = ? AND active = 1').get(employeeId)
   if (!employee) return res.status(404).json({ error: '재직 중인 직원을 찾을 수 없습니다.' })
+  const uniqueDates = [...new Set(dates)]
+  const operations = readSettings().operations
+  const maxPerMonth = operations.maxWishDaysPerEmployee
+  if (employee.dutyType === 'support' && operations.supportMaxRequestsPerDate > 0) {
+    for (const date of uniqueDates) {
+      const existing = db.prepare("SELECT COUNT(*) AS n FROM requests r JOIN employees e ON e.id = r.employee_id WHERE r.request_date = ? AND r.status != 'rejected' AND e.active = 1 AND e.duty_type = 'support' AND r.employee_id != ?").get(date, employeeId).n
+      if (existing >= operations.supportMaxRequestsPerDate) return res.status(400).json({ error: `${date}: 계약직 희망휴무는 같은 날 최대 ${operations.supportMaxRequestsPerDate}명까지 신청할 수 있습니다.` })
+    }
+  }
+  if (maxPerMonth > 0) {
+    const byMonth = Map.groupBy(uniqueDates, date => date.slice(0, 7))
+    for (const [month, selected] of byMonth) {
+      const existing = db.prepare("SELECT request_date AS date FROM requests WHERE employee_id = ? AND request_date >= ? AND request_date < ? AND status != 'rejected'").all(employeeId, `${month}-01`, `${nextMonth(month)}-01`)
+      const pendingDates = new Set(existing.map(row => row.date))
+      const additional = selected.filter(date => !pendingDates.has(date)).length
+      if (pendingDates.size + additional > maxPerMonth) return res.status(400).json({ error: `한 달 희망휴무는 최대 ${maxPerMonth}일까지 신청할 수 있습니다.` })
+    }
+  }
   const insert = db.prepare("INSERT INTO requests (employee_id, request_date) VALUES (?, ?) ON CONFLICT(employee_id, request_date) DO UPDATE SET status = 'pending'")
-  db.transaction(() => [...new Set(dates)].forEach(date => insert.run(employeeId, date)))()
+  db.transaction(() => uniqueDates.forEach(date => insert.run(employeeId, date)))()
   res.status(201).json({ ok: true })
 })
 app.patch('/api/requests/:id', requireAdmin, (req, res) => {
@@ -512,7 +627,7 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
     const validation = validateSchedule({ ...input, shifts: result.shifts })
     const regularCoverageGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
     const dailyStaffingIssues = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} 최소 근무인원 미충족/.test(issue.text))
-    const hardIssues = validation.issues.filter(issue => !regularCoverageGaps.includes(issue) && !dailyStaffingIssues.includes(issue))
+    const hardIssues = validation.issues.filter(issue => issue.text.includes('미편성'))
     if (hardIssues.length) return res.status(422).json({ error: `검증 실패: ${hardIssues.slice(0, 3).map(issue => issue.text).join(' · ')}` })
     const warnings = [...(result.warnings ?? [])]
     if (regularCoverageGaps.length && !warnings.some(warning => warning.includes('정규직 오픈·마감 배치'))) {
@@ -561,4 +676,8 @@ app.use((error, _req, res, _next) => {
 const port = Number(process.env.PORT ?? 3001)
 const host = process.env.HOST ?? '0.0.0.0'
 const server = createServer(app)
-server.listen(port, host, () => console.log(`왕궁농협 하나로마트 근무표 서버가 http://${host}:${server.address().port} 에서 실행 중입니다.`))
+server.listen(port, host, () => {
+  const actualPort = server.address().port
+  console.log(`왕궁농협 하나로마트 근무표 서버가 http://${host}:${actualPort} 에서 실행 중입니다.`)
+  if (process.send) process.send({ type: 'ready', port: actualPort })
+})

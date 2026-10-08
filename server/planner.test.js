@@ -141,11 +141,32 @@ test('November balancing compares weekend rest with the previous month', async (
   const combinedWeekendOff = employees.map(employee => adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off').length + result.shifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off' && [0, 6].includes(new Date(`${shift.date}T00:00:00Z`).getUTCDay())).length)
   assert.ok(Math.max(...combinedWeekendOff) - Math.min(...combinedWeekendOff) <= 3, `combined weekend rest is uneven: ${combinedWeekendOff.join(', ')}`)
 })
-test('fixed work contradicting required rest fails instead of replacing it', async () => {
+test('fixed work is preserved and a contradictory required rest is reported without blocking generation', async () => {
   const input = base()
   input.employees[5].workRules.offRules = [{ weekday: 5, occurrences: [2, 4] }]
   const result = await generateSchedule({ ...input, mode: 'fill', existingShifts: [{ employeeId: 6, date: '2026-02-13', code: 'open' }] })
-  assert.match(result.error, /정기휴무와 충돌/)
+  assert.equal(result.error, undefined)
+  assert.equal(result.shifts.find(shift => shift.employeeId === 6 && shift.date === '2026-02-13').code, 'open')
+  assert.ok(result.warnings.some(warning => warning.includes('정기휴무 필요')))
+})
+test('conflicting store staffing rules produce a best-effort schedule and identify the shortfalls', async () => {
+  const input = {
+    ...base(), month: '2026-10', holidays: ['2026-10-03', '2026-10-09'],
+    employees: employees.map((employee, index) => ({ ...employee, dutyType: index < 3 ? 'functional' : 'support', produceQualified: false })),
+    settings: {
+      daysOffPairs: [{ employeeIds: [5, 6] }], weeklyRestPolicy: 'minimum',
+      operations: { weekdayTarget: 5, weekendTarget: 4, weekdayMinimum: 4, weekendMinimum: 3, functionalMinOnDuty: 2, supportMaxOff: 2, produceOpenCount: 0, requireRegularEachShift: true },
+    },
+    mode: 'fill', lockedThroughDate: '2026-10-08',
+    existingShifts: [{ employeeId: 3, date: '2026-10-19', code: 'open' }],
+  }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  assert.equal(result.shifts.length, 7 * 31)
+  assert.equal(result.shifts.find(shift => shift.employeeId === 3 && shift.date === '2026-10-19').code, 'open')
+  assert.ok(result.warnings.some(warning => warning.includes('기준휴무')))
+  assert.ok(result.warnings.some(warning => warning.includes('권장 근무인원')))
+  assert.ok(!result.warnings.some(warning => warning.includes('동시에 만족할 수 없습니다')))
 })
 test('cross-month week includes already assigned adjacent rest', async () => {
   const input = base()

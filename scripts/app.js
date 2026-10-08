@@ -16,7 +16,7 @@ function run(args) {
   if (result.error) { console.error(result.error.message); process.exit(1) }
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
-if (!existsSync(path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'))) {
+if (!existsSync(path.join(root, 'node_modules', 'vite', 'bin', 'vite.js')) || !existsSync(path.join(root, 'node_modules', 'electron', 'cli.js'))) {
   console.log('처음 실행: 필요한 패키지를 설치합니다.')
   const npmCli = path.join(path.dirname(runtime), 'node_modules', 'npm', 'bin', 'npm-cli.js')
   if (!existsSync(npmCli)) { console.error('먼저 npm install을 실행해 주세요.'); process.exit(1) }
@@ -30,10 +30,13 @@ if (nativeCheck.status !== 0) {
 console.log('근무표 화면을 빌드합니다.')
 run(['node_modules/typescript/bin/tsc', '-b'])
 run(['node_modules/vite/bin/vite.js', 'build'])
-console.log('접속 주소: http://localhost:' + (process.env.PORT ?? '3001'))
-console.log('종료하려면 Ctrl+C를 누르세요.')
-const server = spawn(runtime, ['server/index.js'], { cwd: root, stdio: 'inherit', env: process.env })
-server.on('error', error => { console.error(error.message); process.exitCode = 1 })
-server.on('exit', code => { process.exitCode = code ?? 0 })
-process.on('SIGINT', () => server.kill('SIGINT'))
-process.on('SIGTERM', () => server.kill('SIGTERM'))
+console.log('근무표 데스크톱 앱을 실행합니다.')
+const electron = spawn(runtime, ['node_modules/electron/cli.js', '.'], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, HANARO_NODE_EXECUTABLE: runtime },
+})
+electron.on('error', error => { console.error(error.message); process.exitCode = 1 })
+electron.on('exit', code => { process.exitCode = code ?? 0 })
+process.on('SIGINT', () => electron.kill('SIGINT'))
+process.on('SIGTERM', () => electron.kill('SIGTERM'))
