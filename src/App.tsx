@@ -79,7 +79,7 @@ function App() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [validation, setValidation] = useState<Validation>({ issues: [], pending: [], stats: [] })
   const [generating, setGenerating] = useState(false)
-  const [scheduleOptions, setScheduleOptions] = useState<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; revision: number } | null>(null)
+  const [scheduleOptions, setScheduleOptions] = useState<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; nextOffset: number; revision: number } | null>(null)
   const [photoImport, setPhotoImport] = useState<PhotoImport | null>(null)
   const [referenceAvailable, setReferenceAvailable] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -225,9 +225,22 @@ function App() {
     setGenerating(true); setError('')
     try {
       const monthValue = monthKey(month)
-      const result = await api<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: monthValue, mode }) })
+      const result = await api<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: monthValue, mode, offset: 0 }) })
       setScheduleOptions(result)
     } catch (e) { setError(e instanceof Error ? e.message : '자동 편성 결과를 만들지 못했습니다.') } finally { setGenerating(false) }
+  }
+  const findMoreOptions = async () => {
+    if (!scheduleOptions) return
+    setGenerating(true); setError('')
+    try {
+      const result = await api<{ options: ScheduleOption[]; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: scheduleOptions.month, mode: scheduleOptions.mode, offset: scheduleOptions.nextOffset }) })
+      setScheduleOptions(current => {
+        if (!current) return current
+        const known = new Set(current.options.map(option => option.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')))
+        const added = result.options.filter(option => !known.has(option.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|'))).map((option, index) => ({ ...option, id: current.options.length + index + 1 }))
+        return { ...current, options: [...current.options, ...added], explored: result.explored, nextOffset: result.nextOffset, revision: result.revision }
+      })
+    } catch (e) { setError(e instanceof Error ? e.message : '추가 대안을 찾지 못했습니다.') } finally { setGenerating(false) }
   }
   const applyScheduleOption = async (option: ScheduleOption) => {
     try {
@@ -383,7 +396,7 @@ function App() {
       </div>
     </main>
     {notice && <div className="toast-message"><Icon name="check" size={17}/>{notice}</div>}
-    {scheduleOptions && isAdmin && <div className="modal-backdrop option-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setScheduleOptions(null) }}><section className="option-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title"><header><div><h2 id="options-title">자동 편성 대안</h2><p>{scheduleOptions.month} · 기준 휴무 {scheduleOptions.targetRestDays}일 · 대안을 검토하고 적용할 안을 선택하세요.</p></div><button type="button" className="close-button" onClick={() => setScheduleOptions(null)} aria-label="닫기">×</button></header><div className="option-explainer">계산을 {scheduleOptions.explored}회 실행해 서로 다른 안 {scheduleOptions.options.length}개를 찾았습니다. 근무 규칙을 만족하는 수학적 전체 조합 수를 뜻하지 않으며, 각 안의 경고를 확인한 뒤 적용하세요.</div><div className="option-list">{scheduleOptions.options.map(option => <article key={option.id} className="option-card"><div className="option-card-heading"><div><span>대안 {option.id}</span><b>{option.warnings.length ? `확인 항목 ${option.warnings.length}건` : '표시된 운영 기준 충족'}</b></div><button className="button button-primary" onClick={() => void applyScheduleOption(option)}>이 안 적용</button></div>{option.warnings.length > 0 && <ul>{option.warnings.slice(0, 4).map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>}{option.warnings.length > 4 && <small>그 외 {option.warnings.length - 4}건</small>}</article>)}</div><footer><button className="button button-quiet" onClick={() => setScheduleOptions(null)}>취소</button></footer></section></div>}
+    {scheduleOptions && isAdmin && <div className="modal-backdrop option-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setScheduleOptions(null) }}><section className="option-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title"><header><div><h2 id="options-title">자동 편성 대안</h2><p>{scheduleOptions.month} · 기준 휴무 {scheduleOptions.targetRestDays}일 · 대안을 검토하고 적용할 안을 선택하세요.</p></div><button type="button" className="close-button" onClick={() => setScheduleOptions(null)} aria-label="닫기">×</button></header><div className="option-explainer">계산을 {scheduleOptions.explored}회 실행해 서로 다른 안 {scheduleOptions.options.length}개를 찾았습니다. 전체 조합의 수학적 열거는 아니며, 대안을 더 찾아 후보를 계속 늘릴 수 있습니다. 각 안의 경고를 확인한 뒤 적용하세요.</div><div className="option-list">{scheduleOptions.options.map(option => <article key={option.id} className="option-card"><div className="option-card-heading"><div><span>대안 {option.id}</span><b>{option.warnings.length ? `확인 항목 ${option.warnings.length}건` : '표시된 운영 기준 충족'}</b></div><button className="button button-primary" onClick={() => void applyScheduleOption(option)}>이 안 적용</button></div>{option.warnings.length > 0 && <ul>{option.warnings.slice(0, 4).map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>}{option.warnings.length > 4 && <small>그 외 {option.warnings.length - 4}건</small>}</article>)}</div><footer><button className="button button-quiet" disabled={generating || scheduleOptions.nextOffset >= 100000} onClick={() => void findMoreOptions()}>{generating ? '다른 안 탐색 중…' : '다른 대안 더 탐색'}</button><button className="button button-quiet" onClick={() => setScheduleOptions(null)}>취소</button></footer></section></div>}
     {showReference && isAdmin && <div className="modal-backdrop reference-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowReference(false) }}><section className="reference-viewer" role="dialog" aria-modal="true" aria-labelledby="reference-title"><header><div><h2 id="reference-title">수기 근무표 참고</h2><p>관리자 전용 · 업로드한 원본 이미지</p></div><button type="button" className="close-button" onClick={() => setShowReference(false)} aria-label="닫기">×</button></header><div className="reference-image-wrap"><img src="/api/reference-schedule" alt="왕궁농협 하나로마트 수기 근무표 참고 이미지"/></div></section></div>}
     {showPasswordDialog && <PasswordDialog onClose={() => setShowPasswordDialog(false)} onSave={changePassword}/>}
     {dialog && isAdmin && <EmployeeDialog employee={dialog === 'new' ? null : dialog} onClose={() => setDialog(null)} onSave={saveEmployee} onDelete={deleteEmployee}/>}

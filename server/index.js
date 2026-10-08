@@ -628,7 +628,9 @@ function solveInWorker(input, timeoutMs = 30_000) {
 app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
   const month = String(req.body?.month ?? '')
   const mode = req.body?.mode ?? 'replace'
+  const offset = Number(req.body?.offset ?? 0)
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !['replace', 'fill', 'rebalance'].includes(mode)) return res.status(400).json({ error: '월과 자동편성 방식을 확인해 주세요.' })
+  if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) return res.status(400).json({ error: '추가 탐색 값을 확인해 주세요.' })
   if (mode === 'replace' && db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: `${month}은 기존에 입력한 근무가 확정되어 있습니다. 빈칸 채우기를 사용해 주세요.` })
   if (mode === 'rebalance' && !db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) return res.status(409).json({ error: '먼저 ‘입력된 칸 고정’으로 직접 입력한 근무를 보호해 주세요.' })
   if (generating) return res.status(409).json({ error: '자동편성 중입니다. 잠시 후 다시 실행해 주세요.' })
@@ -638,7 +640,7 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const input = { ...planningInput(month), mode, lockedThroughDate: seoulDateKey(), alternativeSearch: true }
     const options = []
     const seen = new Set()
-    const results = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + attempt * 104729 }, 55_000)))
+    const results = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + (offset + attempt) * 104729 }, 55_000)))
     const explored = results.length
     for (const attempt of results) {
       if (attempt.status !== 'fulfilled' || attempt.value.error) continue
@@ -652,7 +654,7 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     }
     if (revision !== dataRevision) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
     if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
-    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored, revision })
+    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored: offset + explored, nextOffset: offset + explored, revision })
   } catch (error) { next(error) }
   finally { generating = false }
 })
