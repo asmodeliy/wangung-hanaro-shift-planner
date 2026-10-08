@@ -51,7 +51,7 @@ npm run app
 
 운영 데이터는 `data/shift-planner.sqlite`에 저장됩니다. 월 초기화 전 데이터베이스 백업은 `data/backups`에 저장됩니다. `data/backups/schedule-snapshots.json`에서 이름이 지정된 전체 DB 스냅샷을 확인할 수 있습니다. 초기화 때 지운 사진 근무표와 확인 메모는 `data/reference-import-history.json`에 보관합니다. 별도 안전한 백업으로 `data` 폴더 전체도 복사하세요.
 
-Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다. 직원 명단, 근무조건, 현재 배정과 운영설정을 담고 있으며 사용자 계정과 로그인 세션은 제거했습니다. 새 환경은 이 DB를 최초 실행 시 운영 DB로 복사하고, 첫 관리자가 웹 화면에서 계정을 생성합니다. 이후 데이터는 Render 영구 디스크의 `/var/data/shift-planner.sqlite`에서 관리됩니다.
+Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다. 직원 명단, 근무조건, 현재 배정과 운영설정을 담고 있으며 사용자 계정과 로그인 세션은 제거했습니다. 사용자 계정은 별도 환경에서 생성해야 합니다.
 
 관리자 일정 화면의 수기 근무표 참고 이미지는 `data/reference-schedule.png`에 둘 수 있습니다. 계정이 있는 관리자에게만 제공되며 Git에는 포함되지 않습니다.
 
@@ -71,8 +71,6 @@ Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다.
 
 ## 클라우드 호스팅
 
-현재 앱은 Express 서버와 SQLite 파일을 함께 사용합니다. 저장소 루트의 `render.yaml`은 앱 서버와 `/var/data` 영구 디스크를 포함한 Render 배포 설정입니다. SQLite 파일, 사진 근무표, 백업을 유지하려면 영구 디스크가 필요합니다. Render 영구 디스크는 유료 웹 서비스에 연결하고 단일 인스턴스로 운영해야 하며, 배포 시 짧은 재시작이 발생할 수 있습니다. 9명 내외 직원과 관리자 2명의 소규모 운영에는 이 구성이 현재 코드와 가장 잘 맞습니다.
+호스팅 목표는 Vercel과 PostgreSQL(Neon)입니다. 현재 서버는 동기식 `better-sqlite3`와 로컬 파일에 의존하므로 아직 Vercel에 배포할 수 없습니다. 배포 전 API의 데이터 접근을 비동기 PostgreSQL로 이전하고, `deployment/shift-planner.sqlite`의 설정과 근무표를 Neon으로 가져와야 합니다. Vercel 함수의 파일 저장소는 영구 운영 DB로 사용할 수 없습니다. [Vercel 저장소 안내](https://vercel.com/docs/storage), [Vercel Postgres 연동 안내](https://vercel.com/docs/postgres).
 
-Vercel Functions는 읽기 전용 파일 시스템과 임시 `/tmp` 저장소를 사용하므로 현재 SQLite DB를 그대로 운영 데이터로 쓸 수 없습니다. Vercel을 선택하면 SQLite를 공유형 PostgreSQL로 옮긴 뒤 API와 DB 접근 계층도 함께 변경해야 합니다. [Render 웹 서비스](https://render.com/docs/web-services), [Render 영구 디스크 안내](https://render.com/docs/disks), [Vercel 함수 파일 시스템 안내](https://vercel.com/docs/functions/runtimes), [Vercel SQLite 안내](https://vercel.com/kb/guide/is-sqlite-supported-in-vercel).
-
-Render에 배포한 뒤 최초 관리자 계정을 만들고, **운영 설정 → 관리자 계정**에서 두 번째 관리자를 추가하세요. 사용자 계정은 관리자와 직원이 각자 사용하며, 비밀번호는 관리자 화면에서 재설정할 수 있습니다.
+Vercel과 Neon 계정은 이 작업 환경에 연결되어 있지 않아 프로젝트 생성·환경 변수 설정·실제 배포가 아직 진행되지 않았습니다. 앱 배포 뒤에는 최초 관리자 계정을 만들고, **운영 설정 → 관리자 계정**에서 두 번째 관리자를 추가해야 합니다.
