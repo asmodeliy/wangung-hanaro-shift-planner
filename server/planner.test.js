@@ -222,3 +222,17 @@ test('manager produce-open exception is honored by schedule validation', () => {
   input.settings.produceOpenExceptions = ['2026-10-01']
   assert.ok(!validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
 })
+test('agricultural backup opener is only accepted when no agricultural employee opens', () => {
+  const input = { ...base(), employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 4, produceBackup: employee.id === 5 })) }
+  const date = '2026-02-02'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 ? 'off' : employee.id === 5 ? 'open' : 'close' }))
+  let issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(!issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
+  shifts.find(shift => shift.employeeId === 4).code = 'open'
+  issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(issues.some(issue => issue.text.includes('농산 담당자가 오픈하므로 농산 대직자 오픈은 불필요')))
+  shifts.find(shift => shift.employeeId === 4).code = 'off'
+  shifts.find(shift => shift.employeeId === 5).code = 'close'
+  issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
+})

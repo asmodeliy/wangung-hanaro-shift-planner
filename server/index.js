@@ -29,6 +29,7 @@ db.exec(`
     employment_type TEXT NOT NULL DEFAULT '정규직',
     duty_type TEXT NOT NULL DEFAULT 'support',
     produce_qualified INTEGER NOT NULL DEFAULT 0,
+    produce_backup INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +102,7 @@ const employeeColumns = new Set(db.prepare('PRAGMA table_info(employees)').all()
 if (!employeeColumns.has('work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
 if (!employeeColumns.has('duty_type')) db.exec("ALTER TABLE employees ADD COLUMN duty_type TEXT NOT NULL DEFAULT 'support'")
 if (!employeeColumns.has('produce_qualified')) db.exec('ALTER TABLE employees ADD COLUMN produce_qualified INTEGER NOT NULL DEFAULT 0')
+if (!employeeColumns.has('produce_backup')) db.exec('ALTER TABLE employees ADD COLUMN produce_backup INTEGER NOT NULL DEFAULT 0')
 // Public demo seeds contain no personal employee information. Existing local data is preserved.
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
@@ -167,7 +169,7 @@ async function runTransaction(asyncWork, syncWork = asyncWork) {
 }
 async function invalidateConfirmed() { const settings = await readSettings(); settings.confirmedMonths = []; await saveSettings(settings) }
 async function activeEmployees() {
-  return (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
+  return (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
 }
 function holidaysFor(year, settings) {
   const holidays = new Holidays('KR').getHolidays(year).filter(item => item.type === 'public').map(item => ({ date: item.date.slice(0, 10), name: item.name }))
@@ -344,7 +346,7 @@ app.put('/api/auth/password', async (req, res) => {
 
 app.get('/api/employees', async (req, res) => {
   const rows = req.user.role === 'admin'
-    ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
+    ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
     : await db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
 })
@@ -383,33 +385,35 @@ app.post('/api/employees', requireAdmin, async (req, res) => {
   const employmentType = body.employmentType ?? profile?.employmentType ?? '정규직'
   const dutyType = body.dutyType ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
   const produceQualified = body.produceQualified ?? Boolean(profile?.produceQualified ?? false)
+  const produceBackup = body.produceBackup ?? false
   const { active = true, notes = '', workRules = defaultRules } = body
   if (!name) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
   if (!['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
-  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean' || typeof produceBackup !== 'boolean' || (produceQualified && produceBackup)) return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(workRules) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = await db.prepare(`INSERT INTO employees (name, employment_type, duty_type, produce_qualified, active, notes, work_rules, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
+  const result = await db.prepare(`INSERT INTO employees (name, employment_type, duty_type, produce_qualified, produce_backup, active, notes, work_rules, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, produceBackup ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
   await invalidateConfirmed()
-  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
+  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, dutyType, produceQualified, produceBackup, active, notes, workRules: rules })
 })
 app.put('/api/employees/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id)
   const { name, employmentType, active, notes } = req.body ?? {}
   if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
-  const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified FROM employees WHERE id = ?').get(id)
+  const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified, produce_backup FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   const profile = rosterProfile(name)
   const dutyType = req.body.dutyType ?? existing.duty_type ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
   const produceQualified = req.body.produceQualified ?? Boolean(existing.produce_qualified)
-  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
+  const produceBackup = req.body.produceBackup ?? Boolean(existing.produce_backup)
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean' || typeof produceBackup !== 'boolean' || (produceQualified && produceBackup)) return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(req.body.workRules ?? JSON.parse(existing.work_rules)) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = await db.prepare('UPDATE employees SET name = ?, employment_type = ?, duty_type = ?, produce_qualified = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
+  const result = await db.prepare('UPDATE employees SET name = ?, employment_type = ?, duty_type = ?, produce_qualified = ?, produce_backup = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, produceBackup ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
   if (!result.changes) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   await invalidateConfirmed()
-  res.json({ id, name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
+  res.json({ id, name, employmentType, dutyType, produceQualified, produceBackup, active, notes, workRules: rules })
 })
 app.delete('/api/employees/:id', requireAdmin, async (req, res) => {
   const result = await db.prepare('DELETE FROM employees WHERE id = ?').run(Number(req.params.id))
@@ -538,14 +542,15 @@ app.get('/api/holidays', async (req, res) => {
 app.get('/api/shifts', async (req, res) => {
   const month = String(req.query.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식은 YYYY-MM이어야 합니다.' })
-  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.produce_qualified AS produceQualified, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
+  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.produce_qualified AS produceQualified, e.produce_backup AS produceBackup, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
     FROM shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_locks l ON l.employee_id = s.employee_id AND l.shift_date = s.shift_date WHERE s.shift_date >= ? AND s.shift_date < ? ORDER BY s.shift_date, e.sort_order, e.id`)
     .all(`${month}-01`, `${nextMonth(month)}-01`)
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = await readSettings()
-  res.json(rows.map(({ employmentType, produceQualified, locked, ...row }) => {
+  res.json(rows.map(({ employmentType, produceQualified, produceBackup, locked, ...row }) => {
     const times = row.code === 'off' ? null : shiftTimesForEmployee(row.employeeName, employmentType, row.code, settings)
-    if (row.code === 'full' && produceQualified) times.start = '08:00'
+    if ((produceQualified || produceBackup) && row.code === 'open') { times.start = '08:00'; times.end = '17:00' }
+    else if (row.code === 'full' && (produceQualified || produceBackup)) times.start = '08:00'
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })

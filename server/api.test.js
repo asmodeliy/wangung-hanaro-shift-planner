@@ -128,6 +128,25 @@ test('manager can change a named employee employment type and produce assignment
   assert.equal(update.data.produceQualified, true)
   assert.equal((await call('/api/employees')).data.find(employee => employee.id === 1).employmentType, '계약직')
 })
+test('manager can designate and persist an agricultural backup opener', async () => {
+  const created = await call('/api/employees', 'POST', { name: '농산 대직 테스트', employmentType: '정규직', produceBackup: true })
+  assert.equal(created.status, 201)
+  assert.equal(created.data.produceBackup, true)
+  const updated = await call(`/api/employees/${created.data.id}`, 'PUT', { name: '농산 대직 테스트', employmentType: '정규직', dutyType: 'functional', produceBackup: true, active: true, notes: '' })
+  assert.equal(updated.data.produceBackup, true)
+  assert.equal((await call('/api/employees')).data.find(employee => employee.id === created.data.id).produceBackup, true)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: created.data.id, date: '2026-12-05', code: 'open' })).status, 200)
+  await call(`/api/users/employee/${created.data.id}`, 'PUT', { username: 'producebackup', password: 'backup-worker-test-pass' })
+  const adminCookie = cookie
+  const login = await call('/api/auth/login', 'POST', { username: 'producebackup', password: 'backup-worker-test-pass' }, false)
+  assert.equal(login.status, 200)
+  cookie = login.cookie
+  const shifts = await call('/api/shifts?month=2026-12')
+  const opener = shifts.data.find(shift => shift.employeeId === created.data.id && shift.date === '2026-12-05')
+  assert.equal(opener.start, '08:00')
+  assert.equal(opener.end, '17:00')
+  cookie = adminCookie
+})
 test('partial saved shift-time settings are safely filled with defaults', async () => {
   const original = (await call('/api/settings')).data
   assert.equal((await call('/api/settings', 'PUT', { ...original, shiftTimes: {} })).status, 200)
