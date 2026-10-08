@@ -73,6 +73,16 @@ function createWindow() {
   })
 
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    if (isMainFrame) console.error(`화면 로드 실패 (${code}): ${description} · ${url}`)
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`화면 프로세스 종료: ${details.reason} (${details.exitCode})`)
+    if (!quitting) {
+      dialog.showErrorBox('화면 오류', '화면 프로세스가 종료되었습니다. 앱을 다시 실행해 주세요. 오류 내용은 실행 창에서 확인할 수 있습니다.')
+      app.quit()
+    }
+  })
   window.webContents.on('will-navigate', (event, url) => {
     if (!url.startsWith(`${origin}/`)) event.preventDefault()
   })

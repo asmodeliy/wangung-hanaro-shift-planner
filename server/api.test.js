@@ -111,6 +111,16 @@ test('manager can select employment type staffing and invalid split floors are r
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, weekdayContractMinimum: 4 } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })
+test('manager can change a named employee employment type and produce assignment', async () => {
+  const update = await call('/api/employees/1', 'PUT', {
+    name: '진해경', employmentType: '계약직', dutyType: 'other', produceQualified: true,
+    active: true, notes: '수정 확인', workRules: { allowedShifts: ['open', 'close'], offRules: [] },
+  })
+  assert.equal(update.status, 200)
+  assert.equal(update.data.employmentType, '계약직')
+  assert.equal(update.data.produceQualified, true)
+  assert.equal((await call('/api/employees')).data.find(employee => employee.id === 1).employmentType, '계약직')
+})
 test('employees cannot change settings and API omits private employment rules', async () => {
   await call('/api/users/employee/1', 'PUT', { username: 'testemployee', password: 'test-password-only-employee' })
   const adminCookie = cookie

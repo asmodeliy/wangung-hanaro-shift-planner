@@ -2,7 +2,7 @@ import Holidays from 'date-holidays'
 import express from 'express'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
 import postgres, { initializePostgres } from './postgres.js'
 import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
@@ -101,9 +101,6 @@ const employeeColumns = new Set(db.prepare('PRAGMA table_info(employees)').all()
 if (!employeeColumns.has('work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
 if (!employeeColumns.has('duty_type')) db.exec("ALTER TABLE employees ADD COLUMN duty_type TEXT NOT NULL DEFAULT 'support'")
 if (!employeeColumns.has('produce_qualified')) db.exec('ALTER TABLE employees ADD COLUMN produce_qualified INTEGER NOT NULL DEFAULT 0')
-const updateKnownProfile = db.prepare('UPDATE employees SET employment_type = ?, duty_type = ?, produce_qualified = ? WHERE trim(name) = ? AND (employment_type != ? OR duty_type != ? OR produce_qualified != ?)')
-let rosterProfileChanges = 0
-db.transaction(() => { for (const [name, profile] of rosterProfiles) rosterProfileChanges += updateKnownProfile.run(profile.employmentType, profile.dutyType, profile.produceQualified, name, profile.employmentType, profile.dutyType, profile.produceQualified).changes })()
 // Public demo seeds contain no personal employee information. Existing local data is preserved.
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
@@ -117,14 +114,6 @@ if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main'))
   const seedPath = path.join(dataDir, 'initial-settings.json')
   if (existsSync(seedPath)) Object.assign(settings, JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')))
   db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)').run('main', JSON.stringify(settings))
-}
-if (rosterProfileChanges > 0) {
-  const row = db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
-  const settings = JSON.parse(row.setting_value)
-  if (Array.isArray(settings.confirmedMonths) && settings.confirmedMonths.length) {
-    settings.confirmedMonths = []
-    db.prepare('UPDATE app_settings SET setting_value = ? WHERE setting_key = ?').run(JSON.stringify(settings), 'main')
-  }
 }
 }
 async function readSettings() {
@@ -371,9 +360,9 @@ app.post('/api/employees', requireAdmin, async (req, res) => {
   const body = req.body ?? {}
   const name = String(body.name ?? '').trim()
   const profile = rosterProfile(name)
-  const employmentType = profile?.employmentType ?? body.employmentType ?? '정규직'
-  const dutyType = profile?.dutyType ?? body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
-  const produceQualified = profile ? Boolean(profile.produceQualified) : body.produceQualified ?? false
+  const employmentType = body.employmentType ?? profile?.employmentType ?? '정규직'
+  const dutyType = body.dutyType ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = body.produceQualified ?? Boolean(profile?.produceQualified ?? false)
   const { active = true, notes = '', workRules = defaultRules } = body
   if (!name) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
   if (!['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
@@ -392,8 +381,8 @@ app.put('/api/employees/:id', requireAdmin, async (req, res) => {
   const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   const profile = rosterProfile(name)
-  const dutyType = profile?.dutyType ?? req.body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
-  const produceQualified = profile ? Boolean(profile.produceQualified) : req.body.produceQualified ?? false
+  const dutyType = req.body.dutyType ?? existing.duty_type ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = req.body.produceQualified ?? Boolean(existing.produce_qualified)
   if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(req.body.workRules ?? JSON.parse(existing.work_rules)) } catch (error) { return res.status(400).json({ error: error.message }) }
@@ -498,7 +487,7 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
   if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
   if (incoming.operations !== undefined) {
-    const operations = { ...settings.operations, ...(incoming.operations ?? {}) }
+    const operations = { ...settings.operations, ...incoming.operations }
     const ranges = {
       weekdayTarget: [1, 20], weekendTarget: [1, 20], weekdayMinimum: [1, 20], weekendMinimum: [1, 20],
       weekdayRegularTarget: [0, 20], weekdayRegularMinimum: [0, 20], weekdayContractTarget: [0, 20], weekdayContractMinimum: [0, 20],
