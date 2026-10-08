@@ -60,11 +60,17 @@ test('employee records save agricultural role and agricultural open hours overri
   const created = await call('/api/employees', 'POST', { name: '농산 담당', employmentType: '계약직', isAgricultural: true })
   assert.equal(created.status, 201)
   assert.equal(created.data.isAgricultural, true)
+  const backup = await call('/api/employees', 'POST', { name: '농산 대직', employmentType: '정규직', isAgriculturalBackup: true })
+  assert.equal(backup.data.isAgriculturalBackup, true)
+  const backupUpdated = await call(`/api/employees/${backup.data.id}`, 'PUT', { name: '농산 대직', employmentType: '정규직', isAgriculturalBackup: true, active: true, notes: '' })
+  assert.equal(backupUpdated.data.isAgriculturalBackup, true)
   const updated = await call(`/api/employees/${created.data.id}`, 'PUT', { name: '농산 담당', employmentType: '계약직', isAgricultural: true, active: true, notes: '' })
   assert.equal(updated.data.isAgricultural, true)
   assert.ok((await call('/api/employees')).data.find(employee => employee.id === created.data.id).isAgricultural)
+  assert.ok((await call('/api/employees')).data.find(employee => employee.id === backup.data.id).isAgriculturalBackup)
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: created.data.id, date: '2026-12-03', code: 'open' })).status, 200)
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: created.data.id, date: '2026-12-04', code: 'full' })).status, 200)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: backup.data.id, date: '2026-12-05', code: 'open' })).status, 200)
   assert.equal((await call('/api/users/employee/' + created.data.id, 'PUT', { username: 'farmworker', password: 'farm-worker-test-pass' })).status, 200)
   const adminCookie = cookie
   const login = await call('/api/auth/login', 'POST', { username: 'farmworker', password: 'farm-worker-test-pass' }, false)
@@ -77,6 +83,9 @@ test('employee records save agricultural role and agricultural open hours overri
   assert.equal(fullShift.code, 'full')
   assert.deepEqual(fullShift.start, '08:00')
   assert.deepEqual(fullShift.end, '20:00')
+  const backupShift = shifts.data.find(shift => shift.employeeId === backup.data.id && shift.date === '2026-12-05')
+  assert.deepEqual(backupShift.start, '08:00')
+  assert.deepEqual(backupShift.end, '17:00')
   cookie = adminCookie
 })
 test('manual assignments below three workers are saved and reported as a validation issue', async () => {

@@ -22,6 +22,7 @@ db.exec(`
     name TEXT NOT NULL,
     employment_type TEXT NOT NULL DEFAULT '정규직',
     is_agricultural INTEGER NOT NULL DEFAULT 0,
+    is_agricultural_backup INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -71,6 +72,7 @@ db.exec(`
 const employeeCount = db.prepare('SELECT COUNT(*) AS n FROM employees').get().n
 if (!db.prepare('PRAGMA table_info(employees)').all().some(column => column.name === 'work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
 if (!db.prepare('PRAGMA table_info(employees)').all().some(column => column.name === 'is_agricultural')) db.exec('ALTER TABLE employees ADD COLUMN is_agricultural INTEGER NOT NULL DEFAULT 0')
+if (!db.prepare('PRAGMA table_info(employees)').all().some(column => column.name === 'is_agricultural_backup')) db.exec('ALTER TABLE employees ADD COLUMN is_agricultural_backup INTEGER NOT NULL DEFAULT 0')
 // Public demo seeds contain no personal employee information. Existing local data is preserved.
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
@@ -101,7 +103,7 @@ function saveSettings(value) {
 }
 function invalidateConfirmed() { const settings = readSettings(); settings.confirmedMonths = []; saveSettings(settings) }
 function activeEmployees() {
-  return db.prepare('SELECT id, name, employment_type AS employmentType, is_agricultural AS isAgricultural, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, isAgricultural: Boolean(employee.isAgricultural), workRules: JSON.parse(work_rules) }))
+  return db.prepare('SELECT id, name, employment_type AS employmentType, is_agricultural AS isAgricultural, is_agricultural_backup AS isAgriculturalBackup, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, isAgricultural: Boolean(employee.isAgricultural), isAgriculturalBackup: Boolean(employee.isAgriculturalBackup), workRules: JSON.parse(work_rules) }))
 }
 function holidaysFor(year, settings = readSettings()) {
   const holidays = new Holidays('KR').getHolidays(year).filter(item => item.type === 'public').map(item => ({ date: item.date.slice(0, 10), name: item.name }))
@@ -228,7 +230,7 @@ app.put('/api/auth/password', (req, res) => {
 
 app.get('/api/employees', (req, res) => {
   const rows = req.user.role === 'admin'
-    ? db.prepare('SELECT id, name, employment_type AS employmentType, is_agricultural AS isAgricultural, active, notes, work_rules FROM employees ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, isAgricultural: Boolean(employee.isAgricultural), workRules: JSON.parse(work_rules) }))
+    ? db.prepare('SELECT id, name, employment_type AS employmentType, is_agricultural AS isAgricultural, is_agricultural_backup AS isAgriculturalBackup, active, notes, work_rules FROM employees ORDER BY sort_order, id').all().map(({ work_rules, ...employee }) => ({ ...employee, isAgricultural: Boolean(employee.isAgricultural), isAgriculturalBackup: Boolean(employee.isAgriculturalBackup), workRules: JSON.parse(work_rules) }))
     : db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
 })
@@ -257,28 +259,28 @@ app.patch('/api/reference-schedule/import/:id', requireAdmin, (req, res) => {
   res.json({ ok: true })
 })
 app.post('/api/employees', requireAdmin, (req, res) => {
-  const { name, employmentType = '정규직', isAgricultural = false, active = true, notes = '', workRules = defaultRules } = req.body ?? {}
+  const { name, employmentType = '정규직', isAgricultural = false, isAgriculturalBackup = false, active = true, notes = '', workRules = defaultRules } = req.body ?? {}
   if (!String(name ?? '').trim()) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
-  if (!['정규직', '계약직'].includes(employmentType) || typeof isAgricultural !== 'boolean') return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
+  if (!['정규직', '계약직'].includes(employmentType) || typeof isAgricultural !== 'boolean' || typeof isAgriculturalBackup !== 'boolean') return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(workRules) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = db.prepare(`INSERT INTO employees (name, employment_type, is_agricultural, active, notes, work_rules, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, isAgricultural ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
+  const result = db.prepare(`INSERT INTO employees (name, employment_type, is_agricultural, is_agricultural_backup, active, notes, work_rules, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, isAgricultural ? 1 : 0, isAgriculturalBackup ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
   invalidateConfirmed()
-  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, isAgricultural: Boolean(isAgricultural), active, notes, workRules: rules })
+  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, isAgricultural: Boolean(isAgricultural), isAgriculturalBackup: Boolean(isAgriculturalBackup), active, notes, workRules: rules })
 })
 app.put('/api/employees/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id)
-  const { name, employmentType, isAgricultural = false, active, notes } = req.body ?? {}
-  if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType) || typeof isAgricultural !== 'boolean') return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
+  const { name, employmentType, isAgricultural = false, isAgriculturalBackup = false, active, notes } = req.body ?? {}
+  if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType) || typeof isAgricultural !== 'boolean' || typeof isAgriculturalBackup !== 'boolean') return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
   const existing = db.prepare('SELECT work_rules FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   let rules
   try { rules = normalizeRules(req.body.workRules ?? JSON.parse(existing.work_rules)) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = db.prepare('UPDATE employees SET name = ?, employment_type = ?, is_agricultural = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, isAgricultural ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
+  const result = db.prepare('UPDATE employees SET name = ?, employment_type = ?, is_agricultural = ?, is_agricultural_backup = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, isAgricultural ? 1 : 0, isAgriculturalBackup ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
   if (!result.changes) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   invalidateConfirmed()
-  res.json({ id, name, employmentType, isAgricultural: Boolean(isAgricultural), active, notes, workRules: rules })
+  res.json({ id, name, employmentType, isAgricultural: Boolean(isAgricultural), isAgriculturalBackup: Boolean(isAgriculturalBackup), active, notes, workRules: rules })
 })
 app.delete('/api/employees/:id', requireAdmin, (req, res) => {
   const result = db.prepare('DELETE FROM employees WHERE id = ?').run(Number(req.params.id))
@@ -353,14 +355,15 @@ app.get('/api/holidays', (req, res) => {
 app.get('/api/shifts', (req, res) => {
   const month = String(req.query.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식은 YYYY-MM이어야 합니다.' })
-  const rows = db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.is_agricultural AS isAgricultural, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
+  const rows = db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.is_agricultural AS isAgricultural, e.is_agricultural_backup AS isAgriculturalBackup, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
     FROM shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_locks l ON l.employee_id = s.employee_id AND l.shift_date = s.shift_date WHERE s.shift_date >= ? AND s.shift_date < ? ORDER BY s.shift_date, e.sort_order, e.id`)
     .all(`${month}-01`, `${nextMonth(month)}-01`)
-  if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, isAgricultural: Boolean(row.isAgricultural), locked: Boolean(row.locked) })))
+  if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, isAgricultural: Boolean(row.isAgricultural), isAgriculturalBackup: Boolean(row.isAgriculturalBackup), locked: Boolean(row.locked) })))
   const settings = readSettings()
-  res.json(rows.map(({ employmentType, isAgricultural, locked, ...row }) => {
+  res.json(rows.map(({ employmentType, isAgricultural, isAgriculturalBackup, locked, ...row }) => {
     const type = employmentType === '계약직' ? 'contract' : 'regular'
-    const times = row.code === 'off' ? null : row.code === 'full' ? { start: isAgricultural ? '08:00' : settings.shiftTimes.open[type].start, end: settings.shiftTimes.close[type].end } : isAgricultural && row.code === 'open' ? { start: '08:00', end: '17:00' } : settings.shiftTimes[row.code][type]
+    const isAgriculturalOpener = isAgricultural || isAgriculturalBackup
+    const times = row.code === 'off' ? null : row.code === 'full' ? { start: isAgriculturalOpener ? '08:00' : settings.shiftTimes.open[type].start, end: settings.shiftTimes.close[type].end } : isAgriculturalOpener && row.code === 'open' ? { start: '08:00', end: '17:00' } : settings.shiftTimes[row.code][type]
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })

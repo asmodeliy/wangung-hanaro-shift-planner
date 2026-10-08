@@ -57,9 +57,9 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
   for (const date of dates) {
     const workingCount = employees.filter(e => workingCodes.includes(entries.get(`${e.id}:${date}`))).length
     const agriculturalEmployees = employees.filter(employee => employee.isAgricultural)
-    const agriculturalWorking = agriculturalEmployees.filter(employee => workingCodes.includes(entries.get(`${employee.id}:${date}`)))
-    if (agriculturalEmployees.length > 0) {
-      if (!agriculturalWorking.some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'open'))) issues.push({ date, text: `${date} 농산 직원 오픈 근무 없음` })
+    const agriculturalBackups = employees.filter(employee => employee.isAgriculturalBackup)
+    if (agriculturalEmployees.length > 0 || agriculturalBackups.length > 0) {
+      if (![...agriculturalEmployees, ...agriculturalBackups].some(employee => coversShift(entries.get(`${employee.id}:${date}`), 'open'))) issues.push({ date, text: `${date} 농산 직원 또는 농산 대직자 오픈 근무 없음` })
     }
     const fallback = fallbackMinimumWorkersForDate(date, holidays)
     if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
@@ -181,11 +181,24 @@ export async function generateSchedule(input) {
   for (const date of dates) {
     const dayKey = date.replaceAll('-', '')
     const agriculturalEmployees = employees.filter(employee => employee.isAgricultural)
-    if (agriculturalEmployees.length > 0) {
-      lo([
+    const agriculturalBackups = employees.filter(employee => employee.isAgriculturalBackup)
+    if (agriculturalEmployees.length > 0 || agriculturalBackups.length > 0) {
+      const agriculturalOpeners = [
         ...agriculturalEmployees.map(employee => variable(employee.id, date, 'open')),
         ...agriculturalEmployees.map(employee => variable(employee.id, date, 'full')),
+      ]
+      const backupOpeners = [
+        ...agriculturalBackups.map(employee => variable(employee.id, date, 'open')),
+        ...agriculturalBackups.map(employee => variable(employee.id, date, 'full')),
+      ]
+      lo([
+        ...agriculturalOpeners,
+        ...backupOpeners,
       ], 1)
+      if (agriculturalEmployees.length && agriculturalBackups.length) {
+        up([...agriculturalOpeners, ...backupOpeners.map(item => ({ ...item, coef: agriculturalBackups.length }))], agriculturalBackups.length)
+      }
+      for (const employee of agriculturalBackups) lp.objective.vars.push(variable(employee.id, date, 'open', 20_000_000), variable(employee.id, date, 'full', 20_000_000))
     }
     const shiftImbalance = `open_close_imbalance_${dayKey}`
     lp.bounds.push({ name: shiftImbalance, type: glpk.GLP_LO, lb: 0, ub: 0 })

@@ -84,6 +84,23 @@ test('agricultural staff require an open shift but do not require a close shift'
     assert.ok(assigned.every(shift => shift.code === 'open'), `${date} must allow agricultural staff to work open only`)
   }
 })
+test('agricultural backup opens only as fallback when agricultural staff cannot open', async () => {
+  const input = base()
+  input.employees[3].isAgricultural = true
+  input.employees[4].isAgriculturalBackup = true
+  const fallbackDate = '2026-02-02'
+  input.mode = 'fill'
+  input.existingShifts = [{ employeeId: 4, date: fallbackDate, code: 'off' }]
+  const result = await generateSchedule(input)
+  verify(input, result)
+  assert.ok(result.shifts.some(shift => shift.employeeId === 5 && shift.date === fallbackDate && shift.code === 'open'), `${fallbackDate} needs the backup opener`)
+  for (const date of monthDates(input.month)) {
+    const hasAgriculturalOpener = result.shifts.some(shift => shift.employeeId === 4 && shift.date === date && ['open', 'full'].includes(shift.code))
+    const hasBackupOpener = result.shifts.some(shift => shift.employeeId === 5 && shift.date === date && ['open', 'full'].includes(shift.code))
+    assert.ok(hasAgriculturalOpener || hasBackupOpener, `${date} needs an agricultural or backup opener`)
+    assert.equal(hasAgriculturalOpener && hasBackupOpener, false, `${date} must use the backup only when no agricultural employee opens`)
+  }
+})
 test('manual validation identifies missing agricultural open but allows no agricultural closer', () => {
   const input = base()
   input.employees[3].isAgricultural = true
@@ -91,7 +108,7 @@ test('manual validation identifies missing agricultural open but allows no agric
   const date = '2026-02-02'
   const shifts = [{ employeeId: 4, date, code: 'close' }, { employeeId: 5, date, code: 'close' }]
   const issues = validateSchedule({ ...input, shifts }).issues
-  assert.ok(issues.some(issue => issue.text === `${date} 농산 직원 오픈 근무 없음`))
+  assert.ok(issues.some(issue => issue.text === `${date} 농산 직원 또는 농산 대직자 오픈 근무 없음`))
   const onlyOpen = validateSchedule({ ...input, shifts: shifts.map(shift => ({ ...shift, code: 'open' })) }).issues
   assert.ok(!onlyOpen.some(issue => issue.text.includes('농산 직원') && issue.text.includes('마감')))
 })
