@@ -395,7 +395,7 @@ function App() {
                     const closes = shifts.filter(shift => shift.employeeId === employee.id && (shift.code === 'close' || shift.code === 'full')).length
                     const stats = employeeStats.get(employee.id)
                     return <tr key={employee.id} className={own ? 'own-row' : ''}>
-                      <th className="staff-cell"><span className="staff-identity"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b><small>{employee.employmentType === '정규직' ? '일반직' : employee.name === '정지희' ? '농산 오픈 · 08:00–17:00' : '계약직'}</small></span></span></th>
+                      <th className="staff-cell"><span className="staff-identity"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b><small>{employee.employmentType === '정규직' ? '일반직' : '계약직'}</small></span></span></th>
                       {weekDates.map((slot, column) => {
                         if (!slot) return <td key={`blank-${column}`} className="week-empty-day">—</td>
                         const shift = shiftMap.get(`${employee.id}:${slot.date}`)
