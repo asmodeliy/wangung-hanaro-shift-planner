@@ -180,6 +180,8 @@
 .issue-panel > div span { padding: 2px 6px; border-radius: 4px; color: #a6593e; background: #f9e4d8; font-size: 9px; }
 .issue-panel p { display: inline-flex; align-items: center; gap: 6px; margin: 4px 17px 3px 0; color: #95644e; font-size: 10px; }
 .issue-panel p i { width: 4px; height: 4px; border-radius: 50%; background: #c87858; }
+.issue-panel .notice-dismiss { margin-left: 5px; padding: 2px 6px; border: 1px solid #e8c8b8; border-radius: 4px; color: #92533c; background: #fffdfb; font-size: 9px; }
+.issue-panel .notice-dismiss:hover { background: #f9e4d8; }
 .loading-state { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 10px; color: #819087; font-size: 12px; }
 .loading-state i, .boot-screen i { width: 17px; height: 17px; border: 2px solid #dfe8dc; border-top-color: #34764d; border-radius: 50%; animation: spin .75s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
