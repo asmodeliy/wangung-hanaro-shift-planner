@@ -2,7 +2,7 @@ import Holidays from 'date-holidays'
 import express from 'express'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
 import postgres, { initializePostgres } from './postgres.js'
 import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
+const editablePastShiftDates = new Set(['2026-10-09', '2026-10-10'])
 const isHosted = process.env.VERCEL === '1'
 const Database = isHosted ? null : (await import('better-sqlite3')).default
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : isHosted ? path.join('/tmp', 'hanaro-data') : path.join(root, 'data')
@@ -29,6 +30,7 @@ db.exec(`
     employment_type TEXT NOT NULL DEFAULT '정규직',
     duty_type TEXT NOT NULL DEFAULT 'support',
     produce_qualified INTEGER NOT NULL DEFAULT 0,
+    produce_backup INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -101,9 +103,7 @@ const employeeColumns = new Set(db.prepare('PRAGMA table_info(employees)').all()
 if (!employeeColumns.has('work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
 if (!employeeColumns.has('duty_type')) db.exec("ALTER TABLE employees ADD COLUMN duty_type TEXT NOT NULL DEFAULT 'support'")
 if (!employeeColumns.has('produce_qualified')) db.exec('ALTER TABLE employees ADD COLUMN produce_qualified INTEGER NOT NULL DEFAULT 0')
-const updateKnownProfile = db.prepare('UPDATE employees SET employment_type = ?, duty_type = ?, produce_qualified = ? WHERE trim(name) = ? AND (employment_type != ? OR duty_type != ? OR produce_qualified != ?)')
-let rosterProfileChanges = 0
-db.transaction(() => { for (const [name, profile] of rosterProfiles) rosterProfileChanges += updateKnownProfile.run(profile.employmentType, profile.dutyType, profile.produceQualified, name, profile.employmentType, profile.dutyType, profile.produceQualified).changes })()
+if (!employeeColumns.has('produce_backup')) db.exec('ALTER TABLE employees ADD COLUMN produce_backup INTEGER NOT NULL DEFAULT 0')
 // Public demo seeds contain no personal employee information. Existing local data is preserved.
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
@@ -118,21 +118,26 @@ if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main'))
   if (existsSync(seedPath)) Object.assign(settings, JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')))
   db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)').run('main', JSON.stringify(settings))
 }
-if (rosterProfileChanges > 0) {
-  const row = db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
-  const settings = JSON.parse(row.setting_value)
-  if (Array.isArray(settings.confirmedMonths) && settings.confirmedMonths.length) {
-    settings.confirmedMonths = []
-    db.prepare('UPDATE app_settings SET setting_value = ? WHERE setting_key = ?').run(JSON.stringify(settings), 'main')
-  }
-}
 }
 async function readSettings() {
   try {
     const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
     if (!row) return structuredClone(defaultSettings)
     const stored = JSON.parse(row.setting_value)
-    const settings = { ...defaultSettings, ...stored, operations: { ...defaultOperationRules, ...(stored.operations ?? {}) } }
+    const savedTimes = stored.shiftTimes && typeof stored.shiftTimes === 'object' ? stored.shiftTimes : {}
+    const mergeShiftTime = (shift, type) => {
+      const value = savedTimes[shift]?.[type]
+      return { ...defaultSettings.shiftTimes[shift][type], ...(value && typeof value === 'object' ? value : {}) }
+    }
+    const settings = {
+      ...defaultSettings,
+      ...stored,
+      shiftTimes: {
+        open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
+        close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
+      },
+      operations: { ...defaultOperationRules, ...(stored.operations ?? {}) },
+    }
     if (!await db.prepare('SELECT 1 FROM employees WHERE active = 1 AND produce_qualified = 1 LIMIT 1').get()) settings.operations.produceOpenCount = 0
     settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
     settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
@@ -147,7 +152,14 @@ async function readSettings() {
 }
 function shiftTimesForEmployee(name, employmentType, code, settings) {
   const type = code === 'open' && String(name ?? '').trim() === '정지희' ? 'regular' : employmentType === '계약직' ? 'contract' : 'regular'
-  return settings.shiftTimes[code][type]
+  if (code === 'full') {
+    const openType = String(name ?? '').trim() === '정지희' ? 'regular' : type
+    return {
+      start: settings?.shiftTimes?.open?.[openType]?.start ?? defaultSettings.shiftTimes.open[openType].start,
+      end: settings?.shiftTimes?.close?.[type]?.end ?? defaultSettings.shiftTimes.close[type].end,
+    }
+  }
+  return settings?.shiftTimes?.[code]?.[type] ?? defaultSettings.shiftTimes[code][type]
 }
 async function saveSettings(value) {
   await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run('main', JSON.stringify(value))
@@ -158,7 +170,7 @@ async function runTransaction(asyncWork, syncWork = asyncWork) {
 }
 async function invalidateConfirmed() { const settings = await readSettings(); settings.confirmedMonths = []; await saveSettings(settings) }
 async function activeEmployees() {
-  return (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
+  return (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees WHERE active = 1 ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
 }
 function holidaysFor(year, settings) {
   const holidays = new Holidays('KR').getHolidays(year).filter(item => item.type === 'public').map(item => ({ date: item.date.slice(0, 10), name: item.name }))
@@ -335,7 +347,7 @@ app.put('/api/auth/password', async (req, res) => {
 
 app.get('/api/employees', async (req, res) => {
   const rows = req.user.role === 'admin'
-    ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), workRules: JSON.parse(work_rules) }))
+    ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
     : await db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
 })
@@ -371,36 +383,38 @@ app.post('/api/employees', requireAdmin, async (req, res) => {
   const body = req.body ?? {}
   const name = String(body.name ?? '').trim()
   const profile = rosterProfile(name)
-  const employmentType = profile?.employmentType ?? body.employmentType ?? '정규직'
-  const dutyType = profile?.dutyType ?? body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
-  const produceQualified = profile ? Boolean(profile.produceQualified) : body.produceQualified ?? false
+  const employmentType = body.employmentType ?? profile?.employmentType ?? '정규직'
+  const dutyType = body.dutyType ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = body.produceQualified ?? Boolean(profile?.produceQualified ?? false)
+  const produceBackup = body.produceBackup ?? false
   const { active = true, notes = '', workRules = defaultRules } = body
   if (!name) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
   if (!['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
-  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean' || typeof produceBackup !== 'boolean' || (produceQualified && produceBackup)) return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(workRules) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = await db.prepare(`INSERT INTO employees (name, employment_type, duty_type, produce_qualified, active, notes, work_rules, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
+  const result = await db.prepare(`INSERT INTO employees (name, employment_type, duty_type, produce_qualified, produce_backup, active, notes, work_rules, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM employees))`).run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, produceBackup ? 1 : 0, active ? 1 : 0, String(notes).trim(), JSON.stringify(rules))
   await invalidateConfirmed()
-  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
+  res.status(201).json({ id: Number(result.lastInsertRowid), name, employmentType, dutyType, produceQualified, produceBackup, active, notes, workRules: rules })
 })
 app.put('/api/employees/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id)
   const { name, employmentType, active, notes } = req.body ?? {}
   if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
-  const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified FROM employees WHERE id = ?').get(id)
+  const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified, produce_backup FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   const profile = rosterProfile(name)
-  const dutyType = profile?.dutyType ?? req.body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
-  const produceQualified = profile ? Boolean(profile.produceQualified) : req.body.produceQualified ?? false
-  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean') return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
+  const dutyType = req.body.dutyType ?? existing.duty_type ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = req.body.produceQualified ?? Boolean(existing.produce_qualified)
+  const produceBackup = req.body.produceBackup ?? Boolean(existing.produce_backup)
+  if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean' || typeof produceBackup !== 'boolean' || (produceQualified && produceBackup)) return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
   let rules
   try { rules = normalizeRules(req.body.workRules ?? JSON.parse(existing.work_rules)) } catch (error) { return res.status(400).json({ error: error.message }) }
-  const result = await db.prepare('UPDATE employees SET name = ?, employment_type = ?, duty_type = ?, produce_qualified = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
+  const result = await db.prepare('UPDATE employees SET name = ?, employment_type = ?, duty_type = ?, produce_qualified = ?, produce_backup = ?, active = ?, notes = ?, work_rules = ? WHERE id = ?').run(String(name).trim(), employmentType, dutyType, produceQualified ? 1 : 0, produceBackup ? 1 : 0, active ? 1 : 0, String(notes ?? '').trim(), JSON.stringify(rules), id)
   if (!result.changes) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
   await invalidateConfirmed()
-  res.json({ id, name, employmentType, dutyType, produceQualified, active, notes, workRules: rules })
+  res.json({ id, name, employmentType, dutyType, produceQualified, produceBackup, active, notes, workRules: rules })
 })
 app.delete('/api/employees/:id', requireAdmin, async (req, res) => {
   const result = await db.prepare('DELETE FROM employees WHERE id = ?').run(Number(req.params.id))
@@ -477,11 +491,13 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   const settings = await readSettings()
   if (incoming.shiftTimes) {
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/
+    const shiftTimes = structuredClone(settings.shiftTimes)
     for (const shift of ['open', 'close']) for (const type of ['regular', 'contract']) {
-      const time = incoming.shiftTimes?.[shift]?.[type]
+      const time = incoming.shiftTimes?.[shift]?.[type] ?? shiftTimes[shift][type]
       if (!timePattern.test(String(time?.start ?? '')) || !timePattern.test(String(time?.end ?? ''))) return res.status(400).json({ error: '근무시간을 확인해 주세요.' })
+      shiftTimes[shift][type] = { start: time.start, end: time.end }
     }
-    settings.shiftTimes = incoming.shiftTimes
+    settings.shiftTimes = shiftTimes
   }
   if (Array.isArray(incoming.daysOffPairs)) {
     const ids = new Set((await db.prepare('SELECT id FROM employees').all()).map(row => row.id))
@@ -498,16 +514,19 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
   if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
   if (incoming.operations !== undefined) {
-    const operations = incoming.operations
+    const operations = { ...settings.operations, ...incoming.operations }
     const ranges = {
       weekdayTarget: [1, 20], weekendTarget: [1, 20], weekdayMinimum: [1, 20], weekendMinimum: [1, 20],
+      weekdayRegularTarget: [0, 20], weekdayRegularMinimum: [0, 20], weekdayContractTarget: [0, 20], weekdayContractMinimum: [0, 20],
+      weekendRegularTarget: [0, 20], weekendRegularMinimum: [0, 20], weekendContractTarget: [0, 20], weekendContractMinimum: [0, 20],
       functionalMinOnDuty: [0, 9], supportMaxOff: [0, 9], produceOpenCount: [0, 9],
       maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 9], requestDueDay: [1, 28], publishDay: [1, 28],
     }
-    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean') return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
     for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(operations[key]) || operations[key] < min || operations[key] > max) return res.status(400).json({ error: '운영 기준의 인원 수와 날짜를 확인해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), requireRegularEachShift: operations.requireRegularEachShift }
+    for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, requireRegularEachShift: operations.requireRegularEachShift }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()
@@ -524,20 +543,22 @@ app.get('/api/holidays', async (req, res) => {
 app.get('/api/shifts', async (req, res) => {
   const month = String(req.query.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식은 YYYY-MM이어야 합니다.' })
-  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
+  const rows = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code, e.name AS employeeName, e.employment_type AS employmentType, e.produce_qualified AS produceQualified, e.produce_backup AS produceBackup, CASE WHEN l.employee_id IS NULL THEN 0 ELSE 1 END AS locked
     FROM shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_locks l ON l.employee_id = s.employee_id AND l.shift_date = s.shift_date WHERE s.shift_date >= ? AND s.shift_date < ? ORDER BY s.shift_date, e.sort_order, e.id`)
     .all(`${month}-01`, `${nextMonth(month)}-01`)
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = await readSettings()
-  res.json(rows.map(({ employmentType, locked, ...row }) => {
+  res.json(rows.map(({ employmentType, produceQualified, produceBackup, locked, ...row }) => {
     const times = row.code === 'off' ? null : shiftTimesForEmployee(row.employeeName, employmentType, row.code, settings)
+    if ((produceQualified || produceBackup) && row.code === 'open') { times.start = '08:00'; times.end = '17:00' }
+    else if (row.code === 'full' && (produceQualified || produceBackup)) times.start = '08:00'
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })
 app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
-  if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
-  if (date <= seoulDateKey()) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
+  if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
+  if (date <= seoulDateKey() && !editablePastShiftDates.has(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
   if (!await db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
   if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
@@ -651,9 +672,11 @@ app.post('/api/shifts/confirm', requireAdmin, async (req, res) => {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식을 확인해 주세요.' })
   const input = await planningInput(month)
   const validation = validateSchedule({ ...input, shifts: input.existingShifts })
+  const isIgnoredPastOctoberIssue = issue => month === '2026-10' && issue.date >= '2026-10-01' && issue.date <= '2026-10-08'
   const staffingGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
-  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue))
-  const problems = [...blockingIssues, ...validation.pending, ...await photoIssues(month)]
+  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue) && !isIgnoredPastOctoberIssue(issue))
+  const pendingIssues = validation.pending.filter(issue => !isIgnoredPastOctoberIssue(issue))
+  const problems = [...blockingIssues, ...pendingIssues, ...await photoIssues(month)]
   if (problems.length) return res.status(409).json({ error: '확정 전 확인: ' + problems.slice(0, 4).map(i => i.text).join(' · '), validation })
   const settings = await readSettings()
   settings.confirmedMonths = [...new Set([...settings.confirmedMonths, month])]
@@ -746,7 +769,7 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     const input = { ...await planningInput(month), mode, lockedThroughDate: seoulDateKey() }
     const dates = new Set(monthDates(month))
     const employeeIds = new Set(input.employees.map(employee => employee.id))
-    if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
+    if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'full', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
     if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
     const issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.text.includes('미편성'))
     if (issues.length) return res.status(422).json({ error: '편성안에 미입력된 칸이 있습니다.' })

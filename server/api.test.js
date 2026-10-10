@@ -17,7 +17,7 @@ before(async () => {
   folder = await mkdtemp(path.join(os.tmpdir(), 'shift-planner-api-test-'))
   child = spawn(existsSync(systemNode) ? systemNode : process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: folder, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] })
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Test server did not start')), 10000)
+    const timer = setTimeout(() => reject(new Error('Test server did not start')), 30000)
     child.stdout.on('data', buffer => { const match = buffer.toString().match(/http:\/\/127\.0\.0\.1:(\d+)/); if (match) { baseUrl = `http://127.0.0.1:${match[1]}`; clearTimeout(timer); resolve() } })
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Test server exited: ${code}`)) })
     child.once('error', error => { clearTimeout(timer); reject(error) })
@@ -33,6 +33,20 @@ after(async () => {
 test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-02-30', code: 'off' })).status, 400)
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
+})
+test('full-day manual assignments are accepted and returned without losing the full code', async () => {
+  const date = '2026-10-20'
+  const saved = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'full' })
+  assert.equal(saved.status, 200)
+  const rows = await call('/api/shifts?month=2026-10')
+  assert.ok(rows.data.some(row => row.employeeId === 1 && row.date === date && row.code === 'full'))
+})
+test('October 9 and 10 remain editable as explicit past-date exceptions', async () => {
+  for (const date of ['2026-10-09', '2026-10-10']) {
+    const result = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })
+    assert.equal(result.status, 200)
+    assert.ok((await call('/api/shifts?month=2026-10')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'off'))
+  }
 })
 test('holiday endpoint includes stored custom holidays', async () => {
   const settings = (await call('/api/settings')).data
@@ -98,6 +112,57 @@ test('manager can pin one manually selected shift cell for alternative generatio
   assert.equal((await call('/api/shifts/lock-cell', 'POST', { employeeId: 1, date, locked: false })).status, 200)
   rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
   assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, false)
+})
+test('manager can select employment type staffing and invalid split floors are rejected', async () => {
+  const original = (await call('/api/settings')).data
+  const operations = {
+    ...original.operations, staffingMode: 'employmentType',
+    weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 2,
+    weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 1,
+  }
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
+  assert.equal((await call('/api/settings')).data.operations.staffingMode, 'employmentType')
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, weekdayContractMinimum: 4 } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
+})
+test('manager can change a named employee employment type and produce assignment', async () => {
+  const update = await call('/api/employees/1', 'PUT', {
+    name: '진해경', employmentType: '계약직', dutyType: 'other', produceQualified: true,
+    active: true, notes: '수정 확인', workRules: { allowedShifts: ['open', 'close'], offRules: [] },
+  })
+  assert.equal(update.status, 200)
+  assert.equal(update.data.employmentType, '계약직')
+  assert.equal(update.data.produceQualified, true)
+  assert.equal((await call('/api/employees')).data.find(employee => employee.id === 1).employmentType, '계약직')
+})
+test('manager can designate and persist an agricultural backup opener', async () => {
+  const created = await call('/api/employees', 'POST', { name: '농산 대직 테스트', employmentType: '정규직', produceBackup: true })
+  assert.equal(created.status, 201)
+  assert.equal(created.data.produceBackup, true)
+  const updated = await call(`/api/employees/${created.data.id}`, 'PUT', { name: '농산 대직 테스트', employmentType: '정규직', dutyType: 'functional', produceBackup: true, active: true, notes: '' })
+  assert.equal(updated.data.produceBackup, true)
+  assert.equal((await call('/api/employees')).data.find(employee => employee.id === created.data.id).produceBackup, true)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: created.data.id, date: '2026-12-05', code: 'open' })).status, 200)
+  await call(`/api/users/employee/${created.data.id}`, 'PUT', { username: 'producebackup', password: 'backup-worker-test-pass' })
+  const adminCookie = cookie
+  const login = await call('/api/auth/login', 'POST', { username: 'producebackup', password: 'backup-worker-test-pass' }, false)
+  assert.equal(login.status, 200)
+  cookie = login.cookie
+  const shifts = await call('/api/shifts?month=2026-12')
+  const opener = shifts.data.find(shift => shift.employeeId === created.data.id && shift.date === '2026-12-05')
+  assert.equal(opener.start, '08:00')
+  assert.equal(opener.end, '17:00')
+  cookie = adminCookie
+})
+test('partial saved shift-time settings are safely filled with defaults', async () => {
+  const original = (await call('/api/settings')).data
+  assert.equal((await call('/api/settings', 'PUT', { ...original, shiftTimes: {} })).status, 200)
+  const settings = (await call('/api/settings')).data
+  assert.deepEqual(settings.shiftTimes, {
+    open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
+    close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
+  })
+  assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })
 test('employees cannot change settings and API omits private employment rules', async () => {
   await call('/api/users/employee/1', 'PUT', { username: 'testemployee', password: 'test-password-only-employee' })

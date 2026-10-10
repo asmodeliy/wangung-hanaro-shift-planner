@@ -20,6 +20,7 @@ const schema = [
     employment_type TEXT NOT NULL DEFAULT '정규직',
     duty_type TEXT NOT NULL DEFAULT 'support',
     produce_qualified INTEGER NOT NULL DEFAULT 0,
+    produce_backup INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     notes TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -68,13 +69,14 @@ const schema = [
 ]
 
 const tables = {
-  employees: ['id', 'name', 'employment_type', 'duty_type', 'produce_qualified', 'active', 'notes', 'sort_order', 'created_at', 'work_rules'],
+  employees: ['id', 'name', 'employment_type', 'duty_type', 'produce_qualified', 'produce_backup', 'active', 'notes', 'sort_order', 'created_at', 'work_rules'],
   shifts: ['employee_id', 'shift_date', 'code', 'updated_at'],
   shift_locks: ['employee_id', 'shift_date', 'code'],
   locked_months: ['month', 'locked_at'],
   requests: ['id', 'employee_id', 'request_date', 'status', 'created_at'],
   app_settings: ['setting_key', 'setting_value'],
 }
+const sourceEmployeeColumns = new Set(source.prepare('PRAGMA table_info(employees)').all().map(column => column.name))
 
 try {
   await pool.query('BEGIN')
@@ -90,7 +92,10 @@ try {
   }
 
   for (const [table, columns] of Object.entries(tables)) {
-    const rows = source.prepare(`SELECT ${columns.join(', ')} FROM ${table}`).all()
+    const projection = table === 'employees'
+      ? columns.map(column => column === 'produce_backup' && !sourceEmployeeColumns.has(column) ? '0 AS produce_backup' : column)
+      : columns
+    const rows = source.prepare(`SELECT ${projection.join(', ')} FROM ${table}`).all()
     for (const row of rows) {
       const values = columns.map(column => row[column])
       const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ')

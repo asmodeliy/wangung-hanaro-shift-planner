@@ -15,6 +15,15 @@ test('baseline covers both regular shifts, exact monthly quota and weekly minimu
   const input = base()
   verify(input, await generateSchedule(input))
 })
+test('a full-day assignment covers both regular shifts and counts once as a worker', () => {
+  const input = base()
+  const date = '2026-02-05'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 1 ? 'full' : employee.id === 2 ? 'open' : employee.id === 3 ? 'close' : 'off' }))
+  const result = validateSchedule({ ...input, shifts })
+  assert.equal(result.issues.some(issue => issue.date === date && /정규직 없음/.test(issue.text)), false)
+  assert.equal(result.issues.some(issue => issue.date === date && /최소 근무인원 미충족/.test(issue.text)), false)
+  assert.equal(result.stats.find(item => item.employeeId === 1).full, 1)
+})
 test('conflicting approved wishes are adjusted without breaking simultaneous-rest rule', async () => {
   const input = { ...base(), requests: [2, 7].map(employeeId => ({ employeeId, date: '2026-02-05', status: 'approved' })) }
   const result = await generateSchedule(input)
@@ -99,6 +108,26 @@ test('weekday and holiday targets are five and four, with fallback-only staffing
   assert.equal(result.warnings.some(warning => warning.includes(`${fixedDay} 최소 근무인원 미충족`)), false)
   assert.equal(result.shifts.filter(shift => shift.date === fixedDay && ['open', 'close'].includes(shift.code)).length, 4)
   assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues.filter(issue => issue.date === fixedDay && issue.text.includes('최소 근무인원 미충족')).map(issue => issue.text), [])
+})
+test('employment type staffing mode applies separate targets, floors, validation and generation', async () => {
+  const operations = {
+    ...base().settings.operations, staffingMode: 'employmentType',
+    weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 2,
+    weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 1,
+  }
+  assert.equal(minimumWorkersForDate('2026-02-02', [], operations), 5)
+  assert.equal(fallbackMinimumWorkersForDate('2026-02-02', [], operations), 3)
+  const date = '2026-02-02'
+  const underContract = employees.map(employee => ({ employeeId: employee.id, date, code: employee.id <= 3 ? 'open' : employee.id === 4 ? 'close' : 'off' }))
+  const validation = validateSchedule({ ...base(), settings: { ...base().settings, operations }, shifts: underContract })
+  assert.ok(validation.issues.some(issue => issue.text.includes(`${date} 계약직 최소 인원 미충족`)))
+  const input = { ...base(), settings: { ...base().settings, operations } }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  const day = result.shifts.filter(shift => shift.date === date && ['open', 'close'].includes(shift.code))
+  assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '정규직').length >= 1)
+  assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '계약직').length >= 2)
+  assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues, [])
 })
 test('October staffing never drops below the relaxed threshold when three people can cover a fixed Sunday', async () => {
   const fixedDay = '2026-10-17'
@@ -192,4 +221,25 @@ test('manager produce-open exception is honored by schedule validation', () => {
   assert.ok(validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
   input.settings.produceOpenExceptions = ['2026-10-01']
   assert.ok(!validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
+})
+test('agricultural backup opener is only accepted when no agricultural employee opens', () => {
+  const input = { ...base(), employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 4, produceBackup: employee.id === 5 })) }
+  const date = '2026-02-02'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 ? 'off' : employee.id === 5 ? 'open' : 'close' }))
+  let issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(!issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
+  shifts.find(shift => shift.employeeId === 4).code = 'open'
+  issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(issues.some(issue => issue.text.includes('농산 담당자가 오픈하므로 농산 대직자 오픈은 불필요')))
+  shifts.find(shift => shift.employeeId === 4).code = 'off'
+  shifts.find(shift => shift.employeeId === 5).code = 'close'
+  issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
+  assert.ok(issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
+})
+test('agricultural coverage requires an opener only, without a closer requirement', () => {
+  const input = { ...base(), employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 4 || employee.id === 5 })) }
+  const date = '2026-02-02'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 || employee.id === 5 ? 'open' : 'close' }))
+  const agriculturalIssues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date && issue.text.includes('농산'))
+  assert.equal(agriculturalIssues.length, 0)
 })
