@@ -103,7 +103,10 @@ function App() {
   const [showReference, setShowReference] = useState(false)
   const [showPasswordDialog, setShowPasswordDialog] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('wangung-sidebar') === 'collapsed')
-  const [viewMode, setViewMode] = useState<'week' | 'calendar'>(() => localStorage.getItem('wangung-schedule-view') === 'calendar' ? 'calendar' : 'week')
+  const [viewMode, setViewMode] = useState<'table' | 'week' | 'calendar'>(() => {
+    const savedView = localStorage.getItem('wangung-schedule-view')
+    return savedView === 'calendar' || savedView === 'week' ? savedView : 'table'
+  })
   const [weekIndex, setWeekIndex] = useState(() => Math.floor((today.getDate() - 1 + (new Date(today.getFullYear(), today.getMonth(), 1).getDay() + 6) % 7) / 7))
 
   const toggleSidebar = () => setSidebarCollapsed(value => {
@@ -111,7 +114,7 @@ function App() {
     localStorage.setItem('wangung-sidebar', next ? 'collapsed' : 'expanded')
     return next
   })
-  const changeViewMode = (value: 'week' | 'calendar') => {
+  const changeViewMode = (value: 'table' | 'week' | 'calendar') => {
     localStorage.setItem('wangung-schedule-view', value)
     setViewMode(value)
   }
@@ -161,6 +164,11 @@ function App() {
   })
   const weekLabel = weekDates.filter(Boolean).map(item => item!.day)
   const weekRangeLabel = weekLabel.length ? `${weekLabel[0]}일 – ${weekLabel.at(-1)}일` : ''
+  const monthSlots = Array.from({ length: dayCount }, (_, index) => {
+    const day = index + 1
+    const d = new Date(month.getFullYear(), month.getMonth(), day)
+    return { day, date: dateKey(d), d }
+  })
   const shiftMap = useMemo(() => new Map(shifts.map(s => [`${s.employeeId}:${s.date}`, s])), [shifts])
   const holidayMap = useMemo(() => new Map(holidays.map(h => [h.date, h.name])), [holidays])
   const restTarget = useMemo(() => Array.from({ length: dayCount }, (_, i) => { const date = dateKey(new Date(month.getFullYear(), month.getMonth(), i + 1)); const weekday = new Date(`${date}T12:00:00`).getDay(); return weekday === 0 || weekday === 6 || holidayMap.has(date) ? 1 : 0 }).reduce<number>((a, b) => a + b, 0), [dayCount, month, holidayMap])
@@ -332,8 +340,23 @@ function App() {
           <section className="schedule-workspace">
             <div className="schedule-toolbar"><div className="month-picker"><button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button><button className="today-button" onClick={goToToday}>오늘</button>{isAdmin && <button className="button button-quiet reset-month" disabled={generating} onClick={() => void resetMonth()}>{monthLabel(month)} 초기화</button>}</div>{viewMode === 'week' && <div className="week-picker"><button aria-label="이전 주" disabled={weekIndex === 0} onClick={() => setWeekIndex(index => Math.max(0, index - 1))}>‹</button><strong>{weekIndex + 1}주차</strong><span>{weekRangeLabel}</span><button aria-label="다음 주" disabled={weekIndex >= weekCount - 1} onClick={() => setWeekIndex(index => Math.min(weekCount - 1, index + 1))}>›</button></div>}<div className="schedule-meta"><span className="meta-pill"><Icon name="clock" size={15}/> 기준 휴무 <b>{restTarget}일</b></span>{isAdmin && <span className={`schedule-status ${confirmed ? 'is-confirmed' : ''}`}><i/>{confirmed ? '확정된 근무표' : '작성 중'}</span>}</div></div>
             {isAdmin && <div className="schedule-summary"><div><span>재직 직원</span><b>{activeEmployees.length}<small>명</small></b></div><div><span>배정 근무</span><b>{workCount}<small>건</small></b></div><div><span>휴무 신청</span><b>{requests.length}<small>건</small></b></div><div><span>확인 항목</span><b className={scheduleNotices.length ? 'number-warn' : ''}>{scheduleNotices.length}<small>건</small></b></div></div>}
-            <div className="schedule-legend"><span><i className="key-open"/>오픈</span><span><i className="key-close"/>마감</span><span><i className="key-off"/>휴무</span><span><i className="key-request"/>희망휴무 신청</span><span className="approved-hope-key">희망 승인</span><span className="legend-tip">{isAdmin ? '* 표 탭에서만 클릭으로 근무 상태가 수정 가능합니다.' : '본인 일정은 이름 옆에 표시됩니다.'}</span><div className="view-toggle" role="group" aria-label="근무표 보기 방식"><button aria-pressed={viewMode === 'week'} className={viewMode === 'week' ? 'selected' : ''} onClick={() => changeViewMode('week')}>주간</button><button aria-pressed={viewMode === 'calendar'} className={viewMode === 'calendar' ? 'selected' : ''} onClick={() => changeViewMode('calendar')}>월간</button></div></div>
+            <div className="schedule-legend"><span><i className="key-open"/>오픈</span><span><i className="key-close"/>마감</span><span><i className="key-off"/>휴무</span><span><i className="key-request"/>희망휴무 신청</span><span className="approved-hope-key">희망 승인</span><span className="legend-tip">{isAdmin ? '* 표 탭에서만 클릭으로 근무 상태가 수정 가능합니다.' : '본인 일정은 이름 옆에 표시됩니다.'}</span><div className="view-toggle" role="group" aria-label="근무표 보기 방식"><button aria-pressed={viewMode === 'table'} className={viewMode === 'table' ? 'selected' : ''} onClick={() => changeViewMode('table')}>표</button><button aria-pressed={viewMode === 'week'} className={viewMode === 'week' ? 'selected' : ''} onClick={() => changeViewMode('week')}>주간</button><button aria-pressed={viewMode === 'calendar'} className={viewMode === 'calendar' ? 'selected' : ''} onClick={() => changeViewMode('calendar')}>월간</button></div></div>
             {loading ? <div className="loading-state"><i/>근무표를 불러오는 중입니다.</div> : <>
+              {viewMode === 'table' && <div className="schedule-scroll month-grid-scroll" tabIndex={0} role="region" aria-label="월간 근무표 표 보기"><table className="schedule-table month-grid-table"><thead><tr><th className="staff-col">직원</th>{monthSlots.map(slot => <th key={slot.date} className={`${slot.d.getDay() === 0 || holidayMap.has(slot.date) ? 'sunday' : ''} ${slot.d.getDay() === 6 ? 'saturday' : ''} ${holidayMap.has(slot.date) ? 'holiday-head' : ''}`}><span>{weekdays[slot.d.getDay()]}</span><b>{slot.day}</b></th>)}<th className="total-col">합계</th></tr></thead><tbody>{activeEmployees.map((employee, row) => {
+                const own = user.role === 'employee' && employee.id === user.employeeId
+                const rest = shifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off').length
+                const opens = shifts.filter(shift => shift.employeeId === employee.id && (shift.code === 'open' || shift.code === 'full')).length
+                const closes = shifts.filter(shift => shift.employeeId === employee.id && (shift.code === 'close' || shift.code === 'full')).length
+                const stats = employeeStats.get(employee.id)
+                return <tr key={employee.id} className={own ? 'own-row' : ''}><th className="staff-cell"><span className="staff-identity"><span className={`staff-avatar tone-${row % 5}`}>{employee.name.slice(-1)}</span><span className="staff-label"><b>{employee.name}{own && <em>나</em>}</b><small>{employee.employmentType === '정규직' ? '일반직' : employee.name === '정지희' ? '농산 오픈' : '계약직'}</small></span></span></th>{monthSlots.map(slot => {
+                  const shift = shiftMap.get(`${employee.id}:${slot.date}`)
+                  const request = requests.find(item => item.employeeId === employee.id && item.date === slot.date && item.status !== 'rejected')
+                  const approvedHope = isApprovedHopeVisible(slot.date, request)
+                  const warning = scheduleNotices.some(item => item.date === slot.date)
+                  const hours = shift && shift.code !== 'off' ? (shift.code === 'full' ? (isAdmin ? fullShiftTimesForEmployee(employee, settings) : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : isAdmin ? shiftTimesForStaff(employee, shift.code, settings) : shift.start && shift.end ? { start: shift.start, end: shift.end } : null) : null
+                  return <td key={slot.date} className={`${slot.d.getDay() === 0 ? 'sunday-col' : ''} ${slot.d.getDay() === 6 ? 'saturday-col' : ''} ${holidayMap.has(slot.date) ? 'holiday-col' : ''} ${warning ? 'warning-cell' : ''}`}><button disabled={!isAdmin || isLockedDate(slot.date) || Boolean(shift?.locked)} className={`shift-chip ${shift?.code ? `shift-${shift.code}` : 'shift-empty'} ${request ? 'has-request' : ''} ${approvedHope ? 'has-approved-hope' : ''} ${isLockedDate(slot.date) || shift?.locked ? 'is-locked' : ''}`} title={`${shift?.locked ? '입력 확정 · 수정 불가 · ' : isLockedDate(slot.date) ? '지난 날짜 고정 · ' : ''}${shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'full' ? '종일' : shift?.code === 'off' ? '휴무' : '미정'}${hours ? ` · ${hours.start}–${hours.end}` : ''}${request ? ` · ${employee.name} ${request.status === 'approved' ? '희망휴무 승인' : '희망휴무 신청'}` : ''}`} onClick={() => isAdmin && void saveShift(employee.id, slot.day, cycleShift(shift))}>{shift?.code === 'open' ? '오픈' : shift?.code === 'close' ? '마감' : shift?.code === 'full' ? '종일' : shift?.code === 'off' ? '휴무' : '·'}{shift?.locked && <span className="cell-lock-mark">고정</span>}{approvedHope && <span className="cell-hope-mark">희망</span>}{request && !approvedHope && <i/>}</button>{isAdmin && shift && !isLockedDate(slot.date) && <button type="button" className={`cell-pin ${shift.locked ? 'pinned' : ''}`} aria-label={`${employee.name} ${slot.date} ${shift.locked ? '고정 해제' : '고정'}`} title={shift.locked ? '자동 편성에서 제외 · 클릭해 고정 해제' : '이 칸을 고정해 자동 편성 대안에 유지'} onClick={() => void toggleCellLock(shift)}>{shift.locked ? '◆' : '◇'}</button>}</td>
+                })}<td className={`totals-cell ${rest !== restTarget ? 'rest-mismatch' : ''}`}><div className="totals-content"><b title="휴무일수">휴무 {rest}</b><span><i className="total-open-dot"/>오픈 {opens}</span><span><i className="total-close-dot"/>마감 {closes}</span>{isAdmin && <><small className="rest-comparison">주말 {stats?.weekendWork ?? 0}회</small><small className="rest-comparison">최장 {stats?.longestConsecutive ?? 0}일 연속</small></>}</div></td></tr>
+              })}</tbody></table></div>}
               {viewMode === 'week' && <div className="schedule-scroll week-scroll" tabIndex={0} role="region" aria-label="주간 근무표">
                 <table className="schedule-table week-table">
                   <thead><tr><th className="staff-col">직원</th>{weekDates.map((slot, column) => {
