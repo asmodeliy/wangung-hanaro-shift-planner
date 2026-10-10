@@ -41,6 +41,13 @@ test('full-day manual assignments are accepted and returned without losing the f
   const rows = await call('/api/shifts?month=2026-10')
   assert.ok(rows.data.some(row => row.employeeId === 1 && row.date === date && row.code === 'full'))
 })
+test('October 9 and 10 remain editable as explicit past-date exceptions', async () => {
+  for (const date of ['2026-10-09', '2026-10-10']) {
+    const result = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })
+    assert.equal(result.status, 200)
+    assert.ok((await call('/api/shifts?month=2026-10')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'off'))
+  }
+})
 test('holiday endpoint includes stored custom holidays', async () => {
   const settings = (await call('/api/settings')).data
   assert.equal((await call('/api/settings', 'PUT', { ...settings, additionalHolidays: ['2026-12-31'] })).status, 200)

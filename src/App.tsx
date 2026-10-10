@@ -25,6 +25,7 @@ const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZon
 const todayKey = `${todayParts.year}-${todayParts.month}-${todayParts.day}`
 const [todayYear, todayMonth, todayDay] = todayKey.split('-').map(Number)
 const today = new Date(todayYear, todayMonth - 1, todayDay)
+const editablePastShiftDates = new Set(['2026-10-09', '2026-10-10'])
 const defaultOperations: Operations = { weekdayTarget: 5, weekendTarget: 4, weekdayMinimum: 4, weekendMinimum: 3, staffingMode: 'combined', weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 3, weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 2, functionalMinOnDuty: 2, supportMaxOff: 2, supportMaxRequestsPerDate: 2, produceOpenCount: 0, requireRegularEachShift: true, maxConsecutiveWorkDays: 0, maxWishDaysPerEmployee: 0, requestDueDay: 15, publishDay: 20 }
 const defaultSettings: Settings = { shiftTimes: { open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } }, close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } } }, daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], confirmedMonths: [], operations: defaultOperations }
 const monthLabel = (date: Date) => `${date.getFullYear()}년 ${date.getMonth() + 1}월`
@@ -42,7 +43,7 @@ const shiftTimesForStaff = (employee: Employee, code: 'open' | 'close', settings
 const shiftTimeGroup = (settings: Settings, code: 'open' | 'close') => settings.shiftTimes?.[code] ?? defaultSettings.shiftTimes[code]
 const shiftTime = (settings: Settings, code: 'open' | 'close', type: 'regular' | 'contract') => shiftTimeGroup(settings, code)?.[type] ?? defaultSettings.shiftTimes[code][type]
 const isApprovedHopeVisible = (date: string, request?: DayRequest) => date >= '2026-11-01' && request?.status === 'approved'
-const isLockedDate = (date: string) => date <= todayKey
+const isLockedDate = (date: string) => date <= todayKey && !editablePastShiftDates.has(date)
 const isActive = (employee: Employee) => employee.active === true || employee.active === 1
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {

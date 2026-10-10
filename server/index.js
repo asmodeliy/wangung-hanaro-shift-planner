@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
+const editablePastShiftDates = new Set(['2026-10-09', '2026-10-10'])
 const isHosted = process.env.VERCEL === '1'
 const Database = isHosted ? null : (await import('better-sqlite3')).default
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : isHosted ? path.join('/tmp', 'hanaro-data') : path.join(root, 'data')
@@ -557,7 +558,7 @@ app.get('/api/shifts', async (req, res) => {
 app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
   if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
-  if (date <= seoulDateKey()) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
+  if (date <= seoulDateKey() && !editablePastShiftDates.has(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
   if (!await db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
   if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
