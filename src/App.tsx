@@ -202,7 +202,12 @@ function App() {
     const previous = shifts
     const employee = employees.find(item => item.id === employeeId)
     setShifts(list => [...list.filter(item => !(item.employeeId === employeeId && item.date === date)), ...(code ? [{ employeeId, employeeName: employee?.name ?? '', date, code, employmentType: employee?.employmentType }] : [])])
-    try { await api('/api/shifts', { method: 'PUT', body: JSON.stringify({ employeeId, date, code }) }); await load(); toast('근무표를 저장했습니다.') }
+    try {
+      await api('/api/shifts', { method: 'PUT', body: JSON.stringify({ employeeId, date, code }) })
+      if (confirmed) setSettings(current => ({ ...current, confirmedMonths: current.confirmedMonths.filter(item => item !== monthKey(month)) }))
+      try { setValidation(await api<Validation>(`/api/shifts/validation?month=${monthKey(month)}`)) } catch { /* Keep the saved schedule visible if validation refresh fails. */ }
+      toast('근무표를 저장했습니다.')
+    }
     catch (e) { setShifts(previous); setError(e instanceof Error ? e.message : '저장하지 못했습니다.') }
   }
   const cycleShift = (shift?: Shift): ShiftCode | '' => shift?.code === 'open' ? 'close' : shift?.code === 'close' ? 'full' : shift?.code === 'full' ? 'off' : shift?.code === 'off' ? '' : 'open'
@@ -279,8 +284,9 @@ function App() {
   }
   const toggleCellLock = async (shift: Shift) => {
     try {
-      await api('/api/shifts/lock-cell', { method: 'POST', body: JSON.stringify({ employeeId: shift.employeeId, date: shift.date, locked: !shift.locked }) })
-      await load(); toast(shift.locked ? `${shift.employeeName} · ${shift.date} 고정을 해제했습니다.` : `${shift.employeeName} · ${shift.date} 근무를 자동 편성에서 고정했습니다.`)
+      const result = await api<{ locked: boolean }>('/api/shifts/lock-cell', { method: 'POST', body: JSON.stringify({ employeeId: shift.employeeId, date: shift.date, locked: !shift.locked }) })
+      setShifts(current => current.map(item => item.employeeId === shift.employeeId && item.date === shift.date ? { ...item, locked: result.locked } : item))
+      toast(shift.locked ? `${shift.employeeName} · ${shift.date} 고정을 해제했습니다.` : `${shift.employeeName} · ${shift.date} 근무를 자동 편성에서 고정했습니다.`)
     } catch (e) { setError(e instanceof Error ? e.message : '근무 칸을 고정하지 못했습니다.') }
   }
   const resetMonth = async () => {
