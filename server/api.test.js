@@ -41,12 +41,42 @@ test('full-day manual assignments are accepted and returned without losing the f
   const rows = await call('/api/shifts?month=2026-10')
   assert.ok(rows.data.some(row => row.employeeId === 1 && row.date === date && row.code === 'full'))
 })
-test('October 9 and 10 remain editable as explicit past-date exceptions', async () => {
-  for (const date of ['2026-10-09', '2026-10-10']) {
-    const result = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })
-    assert.equal(result.status, 200)
-    assert.ok((await call('/api/shifts?month=2026-10')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'off'))
-  }
+test('past dates are frozen unless the manager explicitly allows them in settings', async () => {
+  const date = '2026-01-07'
+  const blocked = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })
+  assert.equal(blocked.status, 409)
+  const settings = (await call('/api/settings')).data
+  assert.equal((await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [date] })).status, 200)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })).status, 200)
+  assert.ok((await call('/api/shifts?month=2026-01')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'off'))
+  assert.equal((await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [] })).status, 200)
+})
+test('history restore brings back earlier shifts but never rewrites frozen past dates', async () => {
+  const month = '2026-12'
+  const date = '2026-12-14'
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })).status, 200)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'close' })).status, 200)
+  const history = (await call(`/api/shifts/history?month=${month}`)).data
+  const before = history.find(item => item.action.includes(date))
+  assert.ok(before, 'edit should be recorded in history')
+  const oldest = history.at(-1)
+  assert.equal((await call(`/api/shifts/history/${oldest.id}/restore`, 'POST')).status, 200)
+  const rows = (await call(`/api/shifts?month=${month}`)).data
+  assert.ok(!rows.some(row => row.employeeId === 1 && row.date === date), 'restoring the oldest snapshot clears the cell')
+  assert.ok((await call(`/api/shifts/history?month=${month}`)).data.some(item => item.action.startsWith('복원 전 상태')), 'restore itself is recorded')
+})
+test('history restore keeps frozen past dates untouched', async () => {
+  const month = '2026-01'
+  const date = '2026-01-12'
+  const settings = (await call('/api/settings')).data
+  await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [date] })
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })).status, 200)
+  await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [] })
+  const target = (await call(`/api/shifts/history?month=${month}`)).data.at(-1)
+  const result = await call(`/api/shifts/history/${target.id}/restore`, 'POST')
+  assert.equal(result.status, 200)
+  assert.ok(result.data.keptPastDates >= 1)
+  assert.ok((await call(`/api/shifts?month=${month}`)).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'open'))
 })
 test('holiday endpoint includes stored custom holidays', async () => {
   const settings = (await call('/api/settings')).data
@@ -161,6 +191,7 @@ test('partial saved shift-time settings are safely filled with defaults', async 
   assert.deepEqual(settings.shiftTimes, {
     open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
+    produceOpen: { start: '08:00', end: '17:00' },
   })
   assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })

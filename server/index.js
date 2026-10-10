@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
-const editablePastShiftDates = new Set(['2026-10-09', '2026-10-10'])
 const isHosted = process.env.VERCEL === '1'
 const Database = isHosted ? null : (await import('better-sqlite3')).default
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : isHosted ? path.join('/tmp', 'hanaro-data') : path.join(root, 'data')
@@ -42,6 +41,14 @@ db.exec(`
     code TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(employee_id, shift_date)
+  );
+  CREATE TABLE IF NOT EXISTS schedule_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    month TEXT NOT NULL,
+    username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS shift_locks (
     employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
@@ -83,19 +90,10 @@ const defaultSettings = {
   shiftTimes: {
     open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
+    produceOpen: { start: '08:00', end: '17:00' },
   },
-  daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], confirmedMonths: [], weeklyRestPolicy: 'minimum', operations: { ...defaultOperationRules },
+  daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], editablePastShiftDates: [], confirmedMonths: [], operations: { ...defaultOperationRules },
 }
-const rosterProfiles = new Map([
-  ['진해경', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
-  ['이화진', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
-  ['차용호', { employmentType: '정규직', dutyType: 'functional', produceQualified: 0 }],
-  ['정지희', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
-  ['김효섭', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
-  ['최창섭', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
-  ['김은주', { employmentType: '계약직', dutyType: 'support', produceQualified: 0 }],
-])
-function rosterProfile(name) { return rosterProfiles.get(String(name ?? '').trim()) }
 
 if (!isHosted) {
 const employeeCount = db.prepare('SELECT COUNT(*) AS n FROM employees').get().n
@@ -109,7 +107,7 @@ if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
   const seed = existsSync(seedPath) ? JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')) : Array.from({ length: 7 }, (_, index) => ({ name: `직원 ${String.fromCharCode(65 + index)}`, employmentType: '정규직' }))
   const insert = db.prepare('INSERT INTO employees (name, employment_type, duty_type, produce_qualified, work_rules, sort_order) VALUES (?, ?, ?, ?, ?, ?)')
-  db.transaction(() => seed.forEach((employee, index) => { const profile = rosterProfile(employee.name); insert.run(employee.name, profile?.employmentType ?? employee.employmentType, profile?.dutyType ?? (employee.dutyType === 'functional' ? 'functional' : employee.dutyType === 'other' ? 'other' : 'support'), profile?.produceQualified ?? (employee.produceQualified ? 1 : 0), JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index) }))()
+  db.transaction(() => seed.forEach((employee, index) => { insert.run(employee.name, employee.employmentType ?? '정규직', employee.dutyType ?? (employee.employmentType === '계약직' ? 'support' : 'functional'), employee.produceQualified ? 1 : 0, JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index) }))()
 }
 
 if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main')) {
@@ -135,14 +133,14 @@ async function readSettings() {
       shiftTimes: {
         open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
         close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
+        produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
       },
       operations: { ...defaultOperationRules, ...(stored.operations ?? {}) },
     }
-    if (!await db.prepare('SELECT 1 FROM employees WHERE active = 1 AND produce_qualified = 1 LIMIT 1').get()) settings.operations.produceOpenCount = 0
+    delete settings.operations.avoidUnneededProduceBackup
     settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
     settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
-    const substituteIds = await Promise.all(['김효섭', '최창섭'].map(async name => (await db.prepare('SELECT id FROM employees WHERE trim(name) = ? AND active = 1 ORDER BY sort_order,id LIMIT 1').get(name))?.id))
-    if (substituteIds.every(Number.isInteger) && !settings.daysOffPairs.some(pair => pair.employeeIds?.length === 2 && substituteIds.every(id => pair.employeeIds.includes(id)))) settings.daysOffPairs.push({ employeeIds: substituteIds })
+    settings.editablePastShiftDates = Array.isArray(settings.editablePastShiftDates) ? settings.editablePastShiftDates.filter(validDate) : []
     return settings
   }
   catch (error) {
@@ -150,12 +148,13 @@ async function readSettings() {
     return structuredClone(defaultSettings)
   }
 }
-function shiftTimesForEmployee(name, employmentType, code, settings) {
-  const type = code === 'open' && String(name ?? '').trim() === '정지희' ? 'regular' : employmentType === '계약직' ? 'contract' : 'regular'
+function shiftTimesForEmployee(employmentType, code, settings, produceQualified = false, produceBackup = false) {
+  const type = employmentType === '계약직' ? 'contract' : 'regular'
+  if (code === 'open' && (produceQualified || produceBackup)) return settings?.shiftTimes?.produceOpen ?? defaultSettings.shiftTimes.produceOpen
   if (code === 'full') {
-    const openType = String(name ?? '').trim() === '정지희' ? 'regular' : type
+    const openTime = (produceQualified || produceBackup) ? (settings?.shiftTimes?.produceOpen ?? defaultSettings.shiftTimes.produceOpen) : settings?.shiftTimes?.open?.[type] ?? defaultSettings.shiftTimes.open[type]
     return {
-      start: settings?.shiftTimes?.open?.[openType]?.start ?? defaultSettings.shiftTimes.open[openType].start,
+      start: openTime.start,
       end: settings?.shiftTimes?.close?.[type]?.end ?? defaultSettings.shiftTimes.close[type].end,
     }
   }
@@ -167,6 +166,34 @@ async function saveSettings(value) {
 async function runTransaction(asyncWork, syncWork = asyncWork) {
   if (isHosted) return db.transaction(asyncWork)()
   return db.transaction(syncWork)()
+}
+const historyLimitPerMonth = 200
+function snapshotRange(month) { return [`${month}-01`, `${nextMonth(month)}-01`] }
+const snapshotShiftSql = 'SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id'
+const snapshotLockSql = 'SELECT employee_id AS employeeId, shift_date AS date, code FROM shift_locks WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id'
+async function captureScheduleSnapshot(month) {
+  const [from, until] = snapshotRange(month)
+  const [shifts, locks, lockedMonth] = await Promise.all([
+    db.prepare(snapshotShiftSql).all(from, until),
+    db.prepare(snapshotLockSql).all(from, until),
+    db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month),
+  ])
+  return JSON.stringify({ shifts, locks, lockedMonth: Boolean(lockedMonth) })
+}
+function captureScheduleSnapshotSync(month) {
+  const [from, until] = snapshotRange(month)
+  return JSON.stringify({ shifts: db.prepare(snapshotShiftSql).all(from, until), locks: db.prepare(snapshotLockSql).all(from, until), lockedMonth: Boolean(db.prepare('SELECT 1 FROM locked_months WHERE month = ?').get(month)) })
+}
+const historyInsertSql = 'INSERT INTO schedule_history (month, username, action, snapshot) VALUES (?, ?, ?, ?)'
+const historyPruneSql = 'DELETE FROM schedule_history WHERE month = ? AND id NOT IN (SELECT id FROM schedule_history WHERE month = ? ORDER BY id DESC LIMIT ?)'
+// The snapshot is taken inside the same transaction as the change so the stored "before" state is never stale.
+async function recordScheduleHistory(month, username, action) {
+  await db.prepare(historyInsertSql).run(month, username, action, await captureScheduleSnapshot(month))
+  await db.prepare(historyPruneSql).run(month, month, historyLimitPerMonth)
+}
+function recordScheduleHistorySync(month, username, action) {
+  db.prepare(historyInsertSql).run(month, username, action, captureScheduleSnapshotSync(month))
+  db.prepare(historyPruneSql).run(month, month, historyLimitPerMonth)
 }
 async function invalidateConfirmed() { const settings = await readSettings(); settings.confirmedMonths = []; await saveSettings(settings) }
 async function activeEmployees() {
@@ -382,10 +409,9 @@ app.patch('/api/reference-schedule/import/:id', requireAdmin, async (req, res) =
 app.post('/api/employees', requireAdmin, async (req, res) => {
   const body = req.body ?? {}
   const name = String(body.name ?? '').trim()
-  const profile = rosterProfile(name)
-  const employmentType = body.employmentType ?? profile?.employmentType ?? '정규직'
-  const dutyType = body.dutyType ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
-  const produceQualified = body.produceQualified ?? Boolean(profile?.produceQualified ?? false)
+  const employmentType = body.employmentType ?? '정규직'
+  const dutyType = body.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const produceQualified = body.produceQualified ?? false
   const produceBackup = body.produceBackup ?? false
   const { active = true, notes = '', workRules = defaultRules } = body
   if (!name) return res.status(400).json({ error: '직원명을 입력해 주세요.' })
@@ -404,8 +430,7 @@ app.put('/api/employees/:id', requireAdmin, async (req, res) => {
   if (!Number.isInteger(id) || !String(name ?? '').trim() || !['정규직', '계약직'].includes(employmentType)) return res.status(400).json({ error: '직원 정보를 확인해 주세요.' })
   const existing = await db.prepare('SELECT work_rules, duty_type, produce_qualified, produce_backup FROM employees WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: '직원을 찾을 수 없습니다.' })
-  const profile = rosterProfile(name)
-  const dutyType = req.body.dutyType ?? existing.duty_type ?? profile?.dutyType ?? (employmentType === '정규직' ? 'functional' : 'support')
+  const dutyType = req.body.dutyType ?? existing.duty_type ?? (employmentType === '정규직' ? 'functional' : 'support')
   const produceQualified = req.body.produceQualified ?? Boolean(existing.produce_qualified)
   const produceBackup = req.body.produceBackup ?? Boolean(existing.produce_backup)
   if (!['functional', 'support', 'other'].includes(dutyType) || typeof produceQualified !== 'boolean' || typeof produceBackup !== 'boolean' || (produceQualified && produceBackup)) return res.status(400).json({ error: '운영 직무와 농산 담당 여부를 확인해 주세요.' })
@@ -497,6 +522,9 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
       if (!timePattern.test(String(time?.start ?? '')) || !timePattern.test(String(time?.end ?? ''))) return res.status(400).json({ error: '근무시간을 확인해 주세요.' })
       shiftTimes[shift][type] = { start: time.start, end: time.end }
     }
+    const produceOpen = incoming.shiftTimes.produceOpen ?? shiftTimes.produceOpen
+    if (!timePattern.test(String(produceOpen?.start ?? '')) || !timePattern.test(String(produceOpen?.end ?? ''))) return res.status(400).json({ error: '농산 오픈 근무시간을 확인해 주세요.' })
+    shiftTimes.produceOpen = { start: produceOpen.start, end: produceOpen.end }
     settings.shiftTimes = shiftTimes
   }
   if (Array.isArray(incoming.daysOffPairs)) {
@@ -511,22 +539,25 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     if (incoming.produceOpenExceptions.some(date => typeof date !== 'string' || !validDate(date))) return res.status(400).json({ error: '농산 오픈 예외 날짜를 확인해 주세요.' })
     settings.produceOpenExceptions = [...new Set(incoming.produceOpenExceptions)].sort()
   }
-  if (incoming.weeklyRestPolicy && !['minimum', 'exact'].includes(incoming.weeklyRestPolicy)) return res.status(400).json({ error: '주간 휴무 기준을 확인해 주세요.' })
-  if (incoming.weeklyRestPolicy) settings.weeklyRestPolicy = incoming.weeklyRestPolicy
+  if (Array.isArray(incoming.editablePastShiftDates)) {
+    if (incoming.editablePastShiftDates.some(date => typeof date !== 'string' || !validDate(date))) return res.status(400).json({ error: '과거 근무 수정 허용 날짜를 확인해 주세요.' })
+    settings.editablePastShiftDates = [...new Set(incoming.editablePastShiftDates)].sort()
+  }
   if (incoming.operations !== undefined) {
     const operations = { ...settings.operations, ...incoming.operations }
     const ranges = {
-      weekdayTarget: [1, 20], weekendTarget: [1, 20], weekdayMinimum: [1, 20], weekendMinimum: [1, 20],
-      weekdayRegularTarget: [0, 20], weekdayRegularMinimum: [0, 20], weekdayContractTarget: [0, 20], weekdayContractMinimum: [0, 20],
-      weekendRegularTarget: [0, 20], weekendRegularMinimum: [0, 20], weekendContractTarget: [0, 20], weekendContractMinimum: [0, 20],
-      functionalMinOnDuty: [0, 9], supportMaxOff: [0, 9], produceOpenCount: [0, 9],
-      maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 9], requestDueDay: [1, 28], publishDay: [1, 28],
+      minimumEmployeesForGeneration: [0, 100],
+      weekdayTarget: [0, 100], weekendTarget: [0, 100], weekdayMinimum: [0, 100], weekendMinimum: [0, 100],
+      weekdayRegularTarget: [0, 100], weekdayRegularMinimum: [0, 100], weekdayContractTarget: [0, 100], weekdayContractMinimum: [0, 100],
+      weekendRegularTarget: [0, 100], weekendRegularMinimum: [0, 100], weekendContractTarget: [0, 100], weekendContractMinimum: [0, 100],
+      functionalMinOnDuty: [0, 100], supportMaxOff: [0, 100], produceOpenCount: [0, 100],
+      maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 100], requestDueDay: [1, 31], publishDay: [1, 31],
     }
-    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || typeof operations.requireProduceOpener !== 'boolean' || typeof operations.noConsecutiveClose !== 'boolean' || typeof operations.noFullCloseAdjacent !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
     for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(operations[key]) || operations[key] < min || operations[key] > max) return res.status(400).json({ error: '운영 기준의 인원 수와 날짜를 확인해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
     for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, requireRegularEachShift: operations.requireRegularEachShift }
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, requireRegularEachShift: operations.requireRegularEachShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()
@@ -549,21 +580,92 @@ app.get('/api/shifts', async (req, res) => {
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = await readSettings()
   res.json(rows.map(({ employmentType, produceQualified, produceBackup, locked, ...row }) => {
-    const times = row.code === 'off' ? null : shiftTimesForEmployee(row.employeeName, employmentType, row.code, settings)
-    if ((produceQualified || produceBackup) && row.code === 'open') { times.start = '08:00'; times.end = '17:00' }
-    else if (row.code === 'full' && (produceQualified || produceBackup)) times.start = '08:00'
+    const times = row.code === 'off' ? null : shiftTimesForEmployee(employmentType, row.code, settings, Boolean(produceQualified), Boolean(produceBackup))
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
+})
+app.get('/api/shifts/history', requireAdmin, async (req, res) => {
+  const month = String(req.query.month ?? '')
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식은 YYYY-MM이어야 합니다.' })
+  const rows = await db.prepare('SELECT id, month, username, action, created_at AS createdAt, snapshot FROM schedule_history WHERE month = ? ORDER BY id DESC LIMIT 100').all(month)
+  res.json(rows.map(({ snapshot, ...row }) => ({ ...row, shiftCount: JSON.parse(snapshot).shifts?.length ?? 0 })))
+})
+app.post('/api/shifts/history/:id/restore', requireAdmin, async (req, res, next) => {
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: '복원할 이력을 확인해 주세요.' })
+  try {
+    const revision = await db.prepare('SELECT id, month, snapshot FROM schedule_history WHERE id = ?').get(id)
+    if (!revision) return res.status(404).json({ error: '복원할 이력을 찾을 수 없습니다.' })
+    const month = revision.month
+    const snapshot = JSON.parse(revision.snapshot)
+    if (!Array.isArray(snapshot.shifts) || !Array.isArray(snapshot.locks)) return res.status(409).json({ error: '이력 데이터 형식이 올바르지 않습니다.' })
+    const employees = new Set((await db.prepare('SELECT id FROM employees').all()).map(row => Number(row.id)))
+    // Past dates stay frozen exactly like manual edits do, unless the admin explicitly allowed them.
+    const today = seoulDateKey()
+    const editablePast = new Set((await readSettings()).editablePastShiftDates)
+    const isFrozen = date => date < today && !editablePast.has(date)
+    const restorable = item => employees.has(Number(item.employeeId)) && !isFrozen(item.date)
+    const shifts = snapshot.shifts.filter(restorable)
+    const locks = snapshot.locks.filter(restorable)
+    const dates = monthDates(month).filter(date => !isFrozen(date))
+    const frozenCurrentCount = (await db.prepare(snapshotShiftSql).all(`${month}-01`, `${nextMonth(month)}-01`)).filter(item => isFrozen(item.date)).length
+    const lockedMonth = Boolean(snapshot.lockedMonth)
+    const user = req.user.username
+    const action = `복원 전 상태 (이력 #${id} 복원)`
+    const countRemainingLocks = `SELECT 1 FROM shift_locks WHERE shift_date >= ? AND shift_date < ? LIMIT 1`
+    const [from, until] = [`${month}-01`, `${nextMonth(month)}-01`]
+    await runTransaction(async () => {
+      await recordScheduleHistory(month, user, action)
+      for (const date of dates) {
+        await db.prepare('DELETE FROM shifts WHERE shift_date = ?').run(date)
+        await db.prepare('DELETE FROM shift_locks WHERE shift_date = ?').run(date)
+      }
+      const addShift = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?)')
+      const addLock = db.prepare('INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, ?)')
+      for (const item of shifts) await addShift.run(Number(item.employeeId), item.date, item.code)
+      for (const item of locks) await addLock.run(Number(item.employeeId), item.date, item.code)
+      const keepsLocks = await db.prepare(countRemainingLocks).get(from, until)
+      if (lockedMonth || keepsLocks) await db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(month)
+      else await db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    }, () => {
+      recordScheduleHistorySync(month, user, action)
+      for (const date of dates) {
+        db.prepare('DELETE FROM shifts WHERE shift_date = ?').run(date)
+        db.prepare('DELETE FROM shift_locks WHERE shift_date = ?').run(date)
+      }
+      const addShift = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?)')
+      const addLock = db.prepare('INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, ?)')
+      for (const item of shifts) addShift.run(Number(item.employeeId), item.date, item.code)
+      for (const item of locks) addLock.run(Number(item.employeeId), item.date, item.code)
+      const keepsLocks = db.prepare(countRemainingLocks).get(from, until)
+      if (lockedMonth || keepsLocks) db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(month)
+      else db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    })
+    await invalidateConfirmed()
+    const omittedEmployees = snapshot.shifts.filter(item => !employees.has(Number(item.employeeId))).length
+    const keptPastDates = frozenCurrentCount
+    res.json({ ok: true, month, restored: shifts.length, omittedEmployees, keptPastDates })
+  } catch (error) { next(error) }
 })
 app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
   if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
-  if (date <= seoulDateKey() && !editablePastShiftDates.has(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
+  if (date < seoulDateKey() && !(await readSettings()).editablePastShiftDates.includes(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
   if (!await db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
   if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
-  if (code === '') await db.prepare('DELETE FROM shifts WHERE employee_id = ? AND shift_date = ?').run(Number(employeeId), date)
-  else await db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code, updated_at = CURRENT_TIMESTAMP`).run(Number(employeeId), date, code)
+  const previous = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employee, date)
+  if ((previous?.code ?? '') === code) return res.json({ ok: true })
+  const month = date.slice(0, 7)
+  await runTransaction(async () => {
+    await recordScheduleHistory(month, req.user.username, `${date} 근무 수정`)
+    if (code === '') await db.prepare('DELETE FROM shifts WHERE employee_id = ? AND shift_date = ?').run(employee, date)
+    else await db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code, updated_at = CURRENT_TIMESTAMP`).run(employee, date, code)
+  }, () => {
+    recordScheduleHistorySync(month, req.user.username, `${date} 근무 수정`)
+    if (code === '') db.prepare('DELETE FROM shifts WHERE employee_id = ? AND shift_date = ?').run(employee, date)
+    else db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code, updated_at = CURRENT_TIMESTAMP`).run(employee, date, code)
+  })
   await invalidateConfirmed()
   res.json({ ok: true })
 })
@@ -635,11 +737,13 @@ app.post('/api/shifts/lock-existing', requireAdmin, async (req, res) => {
     return res.json({ ok: true, month, locked: count, alreadyLocked: true })
   }
   const count = await runTransaction(async () => {
+    await recordScheduleHistory(month, req.user.username, '기존 입력 고정')
     await db.prepare(`INSERT INTO shift_locks (employee_id, shift_date, code)
       SELECT employee_id, shift_date, code FROM shifts WHERE shift_date >= ? AND shift_date < ?`).run(`${month}-01`, `${nextMonth(month)}-01`)
     await db.prepare('INSERT INTO locked_months (month) VALUES (?)').run(month)
     return (await db.prepare('SELECT COUNT(*) AS n FROM shift_locks WHERE shift_date >= ? AND shift_date < ?').get(`${month}-01`, `${nextMonth(month)}-01`)).n
   }, () => {
+    recordScheduleHistorySync(month, req.user.username, '기존 입력 고정')
     db.prepare(`INSERT INTO shift_locks (employee_id, shift_date, code)
       SELECT employee_id, shift_date, code FROM shifts WHERE shift_date >= ? AND shift_date < ?`).run(`${month}-01`, `${nextMonth(month)}-01`)
     db.prepare('INSERT INTO locked_months (month) VALUES (?)').run(month)
@@ -651,19 +755,33 @@ app.post('/api/shifts/lock-cell', requireAdmin, async (req, res) => {
   const employeeId = Number(req.body?.employeeId)
   const date = String(req.body?.date ?? '')
   const lock = req.body?.locked === true
-  if (!Number.isInteger(employeeId) || !validDate(date) || date <= seoulDateKey()) return res.status(400).json({ error: '고정할 직원과 미래 날짜를 확인해 주세요.' })
+  if (!Number.isInteger(employeeId) || !validDate(date)) return res.status(400).json({ error: '고정할 직원과 날짜를 확인해 주세요.' })
+  if (lock && date < seoulDateKey() && !(await readSettings()).editablePastShiftDates.includes(date)) return res.status(400).json({ error: '과거 날짜는 운영 설정에서 수정 허용한 경우에만 고정할 수 있습니다.' })
   const shift = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employeeId, date)
   if (!shift) return res.status(404).json({ error: '먼저 근무 칸에 오픈·마감·휴무를 입력해 주세요.' })
+  const currentLock = await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employeeId, date)
+  if (Boolean(currentLock) === lock) return res.json({ ok: true, locked: lock })
+  const month = date.slice(0, 7)
   await runTransaction(async () => {
+    await recordScheduleHistory(month, req.user.username, `${date} 근무 ${lock ? '고정' : '고정 해제'}`)
     if (lock) {
       await db.prepare('INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code').run(employeeId, date, shift.code)
       await db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(date.slice(0, 7))
-    } else await db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employeeId, date)
+    } else {
+      await db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employeeId, date)
+      const remaining = await db.prepare('SELECT 1 FROM shift_locks WHERE shift_date >= ? AND shift_date < ? LIMIT 1').get(`${month}-01`, `${nextMonth(month)}-01`)
+      if (!remaining) await db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    }
   }, () => {
+    recordScheduleHistorySync(month, req.user.username, `${date} 근무 ${lock ? '고정' : '고정 해제'}`)
     if (lock) {
       db.prepare('INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code').run(employeeId, date, shift.code)
       db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(date.slice(0, 7))
-    } else db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employeeId, date)
+    } else {
+      db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employeeId, date)
+      const remaining = db.prepare('SELECT 1 FROM shift_locks WHERE shift_date >= ? AND shift_date < ? LIMIT 1').get(`${month}-01`, `${nextMonth(month)}-01`)
+      if (!remaining) db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    }
   })
   res.json({ ok: true, locked: lock })
 })
@@ -672,10 +790,9 @@ app.post('/api/shifts/confirm', requireAdmin, async (req, res) => {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식을 확인해 주세요.' })
   const input = await planningInput(month)
   const validation = validateSchedule({ ...input, shifts: input.existingShifts })
-  const isIgnoredPastOctoberIssue = issue => month === '2026-10' && issue.date >= '2026-10-01' && issue.date <= '2026-10-08'
   const staffingGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
-  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue) && !isIgnoredPastOctoberIssue(issue))
-  const pendingIssues = validation.pending.filter(issue => !isIgnoredPastOctoberIssue(issue))
+  const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue))
+  const pendingIssues = validation.pending
   const problems = [...blockingIssues, ...pendingIssues, ...await photoIssues(month)]
   if (problems.length) return res.status(409).json({ error: '확정 전 확인: ' + problems.slice(0, 4).map(i => i.text).join(' · '), validation })
   const settings = await readSettings()
@@ -705,10 +822,15 @@ app.post('/api/shifts/reset', requireAdmin, async (req, res, next) => {
       await writeDataJson('reference-import-history.json', history)
       await writeDataJson('reference-import.json', { month, entries: [], notes: [], resetAt: new Date().toISOString() })
     }
-    const result = await runTransaction(async () => (await db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
-        AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)).changes,
-    () => db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
-        AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`).changes)
+    const result = await runTransaction(async () => {
+      await recordScheduleHistory(month, req.user.username, '월간 근무표 초기화')
+      return (await db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
+        AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)).changes
+    }, () => {
+      recordScheduleHistorySync(month, req.user.username, '월간 근무표 초기화')
+      return db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
+        AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`).changes
+    })
     await invalidateConfirmed()
     res.json({ ok: true, month, deleted: result, preservedThrough: lockedThroughDate, backup: isHosted ? backupPath : path.relative(root, backupPath).replaceAll('\\', '/') })
   } catch (error) { next(error) }
@@ -775,11 +897,13 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     if (issues.length) return res.status(422).json({ error: '편성안에 미입력된 칸이 있습니다.' })
     const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
     await runTransaction(async () => {
+      await recordScheduleHistory(month, req.user.username, '자동 편성안 적용')
       if (mode === 'replace') await db.prepare('DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?').run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
       if (mode === 'rebalance') await db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ? AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
       const insert = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO NOTHING')
       for (const entry of shifts) if (entry.date > input.lockedThroughDate || existingCells.has(`${entry.employeeId}:${entry.date}`)) await insert.run(entry.employeeId, entry.date, entry.code)
     }, () => {
+      recordScheduleHistorySync(month, req.user.username, '자동 편성안 적용')
       if (mode === 'replace') db.prepare('DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?').run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
       if (mode === 'rebalance') db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ? AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(input.lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`)
       const insert = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO NOTHING')
@@ -842,12 +966,14 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
       }
     }
     await runTransaction(async () => {
+      await recordScheduleHistory(month, req.user.username, `자동 편성 (${mode})`)
       if (mode === 'replace') await db.prepare('DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?').run(lockedThroughDate, month + '-01', nextMonth(month) + '-01')
       if (mode === 'rebalance') await db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
         AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, month + '-01', nextMonth(month) + '-01')
       const insert = db.prepare('INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO NOTHING')
       for (const entry of result.shifts) if (entry.date > lockedThroughDate || existingCells.has(`${entry.employeeId}:${entry.date}`)) await insert.run(entry.employeeId, entry.date, entry.code)
     }, () => {
+      recordScheduleHistorySync(month, req.user.username, `자동 편성 (${mode})`)
       if (mode === 'replace') db.prepare('DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?').run(lockedThroughDate, month + '-01', nextMonth(month) + '-01')
       if (mode === 'rebalance') db.prepare(`DELETE FROM shifts WHERE shift_date > ? AND shift_date >= ? AND shift_date < ?
         AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, month + '-01', nextMonth(month) + '-01')

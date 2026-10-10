@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { defaultRules, fallbackMinimumWorkersForDate, generateSchedule, isRequiredOff, minimumWorkersForDate, monthDates, normalizeRules, restTarget, validDate, validateSchedule } from './planner.js'
 
 const employees = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `직원${i + 1}`, employmentType: i < 3 ? '정규직' : '계약직', workRules: structuredClone(defaultRules) }))
-const base = () => ({ month: '2026-02', employees: structuredClone(employees), settings: { daysOffPairs: [{ employeeIds: [2, 7] }], weeklyRestPolicy: 'minimum' }, holidays: [] })
+const base = () => ({ month: '2026-02', employees: structuredClone(employees), settings: { daysOffPairs: [{ employeeIds: [2, 7] }], operations: { weekdayTarget: 3, weekendTarget: 3, weekdayMinimum: 3, weekendMinimum: 3 } }, holidays: [] })
 function verify(input, result) {
   assert.equal(result.error, undefined)
   assert.equal(result.shifts.length, input.employees.length * monthDates(input.month).length)
@@ -23,6 +23,13 @@ test('a full-day assignment covers both regular shifts and counts once as a work
   assert.equal(result.issues.some(issue => issue.date === date && /정규직 없음/.test(issue.text)), false)
   assert.equal(result.issues.some(issue => issue.date === date && /최소 근무인원 미충족/.test(issue.text)), false)
   assert.equal(result.stats.find(item => item.employeeId === 1).full, 1)
+})
+test('a full-day functional employee counts toward minimum functional coverage', () => {
+  const input = { ...base(), employees: employees.map(employee => ({ ...employee, dutyType: employee.id <= 2 ? 'functional' : 'support' })), settings: { operations: { functionalMinOnDuty: 1 } } }
+  const date = '2026-02-05'
+  const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 1 ? 'full' : employee.id === 2 ? 'off' : 'close' }))
+  const result = validateSchedule({ ...input, shifts })
+  assert.equal(result.issues.some(issue => issue.date === date && issue.text.includes('일반직 출근 부족')), false)
 })
 test('conflicting approved wishes are adjusted without breaking simultaneous-rest rule', async () => {
   const input = { ...base(), requests: [2, 7].map(employeeId => ({ employeeId, date: '2026-02-05', status: 'approved' })) }
@@ -89,8 +96,8 @@ test('rebalance prefers Jinhaegyeong or Chayongho over Ehwajin on regular-gap da
   }
 })
 test('weekday and holiday targets are five and four, with fallback-only staffing warnings', async () => {
-  assert.equal(minimumWorkersForDate('2026-09-30'), 3)
-  assert.equal(fallbackMinimumWorkersForDate('2026-09-30'), 3)
+  assert.equal(minimumWorkersForDate('2026-09-30'), 5)
+  assert.equal(fallbackMinimumWorkersForDate('2026-09-30'), 4)
   assert.equal(minimumWorkersForDate('2026-10-08', ['2026-10-09']), 5)
   assert.equal(minimumWorkersForDate('2026-10-09', ['2026-10-09']), 4)
   assert.equal(minimumWorkersForDate('2026-10-10', ['2026-10-09']), 4)
@@ -222,7 +229,7 @@ test('manager produce-open exception is honored by schedule validation', () => {
   input.settings.produceOpenExceptions = ['2026-10-01']
   assert.ok(!validateSchedule(input).issues.some(issue => issue.date === '2026-10-01' && issue.text.includes('농산 담당 오픈조 부족')))
 })
-test('agricultural backup opener is only accepted when no agricultural employee opens', () => {
+test('agricultural employee and backup may both open', () => {
   const input = { ...base(), employees: structuredClone(employees).map(employee => ({ ...employee, produceQualified: employee.id === 4, produceBackup: employee.id === 5 })) }
   const date = '2026-02-02'
   const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 ? 'off' : employee.id === 5 ? 'open' : 'close' }))
@@ -230,7 +237,7 @@ test('agricultural backup opener is only accepted when no agricultural employee 
   assert.ok(!issues.some(issue => issue.text.includes('농산 담당자 또는 대직자 오픈 근무 없음')))
   shifts.find(shift => shift.employeeId === 4).code = 'open'
   issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
-  assert.ok(issues.some(issue => issue.text.includes('농산 담당자가 오픈하므로 농산 대직자 오픈은 불필요')))
+  assert.equal(issues.some(issue => issue.text.includes('농산 대직자 오픈은 불필요')), false)
   shifts.find(shift => shift.employeeId === 4).code = 'off'
   shifts.find(shift => shift.employeeId === 5).code = 'close'
   issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date)
@@ -242,4 +249,43 @@ test('agricultural coverage requires an opener only, without a closer requiremen
   const shifts = input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 4 || employee.id === 5 ? 'open' : 'close' }))
   const agriculturalIssues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.date === date && issue.text.includes('농산'))
   assert.equal(agriculturalIssues.length, 0)
+})
+
+const closeRotationIssues = (shifts, operations = {}, extra = {}) => {
+  const input = { ...base(), settings: { ...base().settings, operations: { ...base().settings.operations, ...operations } }, ...extra }
+  return validateSchedule({ ...input, shifts }).issues.filter(issue => /마감 연속|종일·마감/.test(issue.text))
+}
+const cell = (employeeId, date, code) => ({ employeeId, date, code })
+
+test('regular staff cannot close on consecutive days, and the rule can be switched off', () => {
+  const shifts = [cell(1, '2026-02-03', 'close'), cell(1, '2026-02-04', 'close')]
+  assert.equal(closeRotationIssues(shifts).length, 1)
+  assert.equal(closeRotationIssues(shifts, { noConsecutiveClose: false }).length, 0)
+})
+test('regular staff cannot pair a full day with a close shift on adjacent days', () => {
+  const fullThenClose = [cell(1, '2026-02-03', 'full'), cell(1, '2026-02-04', 'close')]
+  const closeThenFull = [cell(1, '2026-02-03', 'close'), cell(1, '2026-02-04', 'full')]
+  assert.equal(closeRotationIssues(fullThenClose).length, 1)
+  assert.equal(closeRotationIssues(closeThenFull).length, 1)
+  assert.equal(closeRotationIssues(fullThenClose, { noFullCloseAdjacent: false }).length, 0)
+  assert.equal(closeRotationIssues(closeThenFull, { noFullCloseAdjacent: false }).length, 0)
+})
+test('close rotation rules ignore contract staff and respect the previous month', () => {
+  assert.equal(closeRotationIssues([cell(5, '2026-02-03', 'close'), cell(5, '2026-02-04', 'close')]).length, 0)
+  const adjacentShifts = [cell(1, '2026-01-31', 'close')]
+  assert.equal(closeRotationIssues([cell(1, '2026-02-01', 'close')], {}, { adjacentShifts }).length, 1)
+})
+test('generated schedules never give regular staff consecutive closes or full/close pairs', async () => {
+  const input = base()
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  const regular = new Set(input.employees.filter(employee => employee.employmentType === '정규직').map(employee => employee.id))
+  const byKey = new Map(result.shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
+  const dates = monthDates(input.month)
+  for (const id of regular) for (let i = 1; i < dates.length; i++) {
+    const previous = byKey.get(`${id}:${dates[i - 1]}`)
+    const current = byKey.get(`${id}:${dates[i]}`)
+    assert.ok(!(previous === 'close' && current === 'close'), `${id} closes on ${dates[i - 1]} and ${dates[i]}`)
+    assert.ok(!((previous === 'full' && current === 'close') || (previous === 'close' && current === 'full')), `${id} full/close pair on ${dates[i]}`)
+  }
 })
