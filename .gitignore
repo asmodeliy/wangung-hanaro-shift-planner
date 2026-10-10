@@ -1,6 +1,11 @@
 node_modules/
 dist/
-data/
+data/*
+!data/shift-planner.sqlite
+!data/backups/
+data/backups/*
+!data/backups/2026-11-before-reset-20261010T051738Z.sqlite
+!data/backups/2026-12-before-reset-20261010T051035Z.sqlite
 *.log
 .DS_Store
 .env
