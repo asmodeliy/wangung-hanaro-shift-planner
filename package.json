@@ -20,8 +20,10 @@
     "antd": "^6.6.5",
     "better-sqlite3": "^12.2.0",
     "date-holidays": "^3.37.0",
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "glpk.js": "^5.0.0",
+    "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

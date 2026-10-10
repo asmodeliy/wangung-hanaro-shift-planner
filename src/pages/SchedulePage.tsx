@@ -1,8 +1,9 @@
-import type { MouseEvent } from 'react'
+import { useState, type MouseEvent } from 'react'
 import type { AppState } from '../hooks/useApp'
 import { monthKey, monthLabel } from '../lib/schedule'
 import { Icon } from '../components/Icon'
 import { MonthCalendar, MonthTable, WeekCards, WeekTable } from '../components/ScheduleViews'
+import { ExportDialog, type ExportFormat } from '../components/ScheduleDialogs'
 
 const closeMenu = (event: MouseEvent<HTMLElement>) => event.currentTarget.closest('details')?.removeAttribute('open')
 
@@ -13,6 +14,7 @@ export function SchedulePage({ app }: { app: AppState }) {
     referenceAvailable, setShowReference, loading, restTarget, activeEmployees, workCount, requests, settings,
     visibleScheduleNotices, visibleRequestWarnings, dismissNotice, photoImport, resolvePhotoNote,
   } = app
+  const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null)
   const noticeCount = visibleScheduleNotices.length + visibleRequestWarnings.length
   const title = isAdmin ? '월간 근무표' : `${user?.employeeName ?? '내'} 근무 일정`
   const subtitle = isAdmin ? '희망휴무와 운영 조건을 확인하며 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'
@@ -21,7 +23,8 @@ export function SchedulePage({ app }: { app: AppState }) {
     <header className="page-head">
       <div><h1>{title}</h1><p>{subtitle}</p></div>
       <div className="page-actions">
-        <button className="btn btn-ghost" onClick={() => window.print()}><Icon name="print" size={16}/>인쇄</button>
+        <button className="btn btn-ghost" onClick={() => setExportFormat('xlsx')}><Icon name="download" size={16}/>엑셀 내보내기</button>
+        <button className="btn btn-ghost" onClick={() => setExportFormat('pdf')}><Icon name="print" size={16}/>PDF 내보내기</button>
         {isAdmin && <>
           <button className="btn" disabled={generating} onClick={() => void generate('fill')}>빈칸 채우기</button>
           <button className="btn btn-primary" disabled={generating || hasLockedShifts} title={hasLockedShifts ? '고정된 입력이 있어 빈칸 채우기만 사용할 수 있습니다.' : undefined} onClick={() => void generate()}>
@@ -120,5 +123,6 @@ export function SchedulePage({ app }: { app: AppState }) {
         <button className="btn btn-sm" onClick={() => void resolvePhotoNote(note.id, !note.resolved)}>{note.resolved ? '되돌리기' : '확인 완료'}</button>
       </li>)}</ul>
     </section>}
+    {exportFormat && <ExportDialog currentMonth={monthKey(month)} initialFormat={exportFormat} onClose={() => setExportFormat(null)}/>}
   </>
 }

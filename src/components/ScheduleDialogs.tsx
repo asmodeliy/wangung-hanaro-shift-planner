@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import type { AppState } from '../hooks/useApp'
+import { api } from '../lib/api'
 import { monthLabel, shiftShort, weekdays } from '../lib/schedule'
 import { Modal } from './Modal'
 
@@ -68,5 +70,53 @@ export function ReferenceDialog({ app }: { app: AppState }) {
   if (!app.showReference) return null
   return <Modal size="lg" title="수기 근무표 참고" description="관리자 전용 · 업로드한 원본 이미지" onClose={() => app.setShowReference(false)}>
     <img className="reference-image" src="/api/reference-schedule" alt="수기 근무표 참고 이미지"/>
+  </Modal>
+}
+
+const monthText = (month: string) => `${month.slice(0, 4)}년 ${Number(month.slice(5, 7))}월`
+
+export type ExportFormat = 'pdf' | 'xlsx'
+
+/** Choose file type, layout (month table or calendar) and months. PDF pages and Excel sheets are one per month. */
+export function ExportDialog({ currentMonth, initialFormat, onClose }: { currentMonth: string; initialFormat: ExportFormat; onClose: () => void }) {
+  const [format, setFormat] = useState<ExportFormat>(initialFormat)
+  const [layout, setLayout] = useState<'table' | 'calendar'>('table')
+  const [months, setMonths] = useState<string[] | null>(null)
+  const [selected, setSelected] = useState<string[]>([currentMonth])
+  const [failed, setFailed] = useState('')
+  useEffect(() => {
+    void api<string[]>('/api/export/months').then(list => setMonths([...new Set([...list, currentMonth])].sort()))
+      .catch(error => setFailed(error instanceof Error ? error.message : '내보낼 월을 불러오지 못했습니다.'))
+  }, [currentMonth])
+  const toggle = (month: string) => setSelected(current => current.includes(month) ? current.filter(item => item !== month) : [...current, month].sort())
+  const href = `/api/export/schedule.${format}?layout=${layout}&months=${selected.join(',')}`
+  const choice = <T extends string>(value: T, current: T, set: (next: T) => void, title: string, hint: string) =>
+    <button type="button" className={`choice ${value === current ? 'is-selected' : ''}`} aria-pressed={value === current} onClick={() => set(value)}><b>{title}</b><small>{hint}</small></button>
+  return <Modal size="sm" title="내보내기" description="A4 가로 용지에 맞춰 한 달을 한 장(한 시트)으로 만듭니다. 선택한 월마다 한 장씩 만들어집니다." onClose={onClose}
+    footer={<>
+      <span className="spacer"/>
+      <button className="btn" type="button" onClick={onClose}>취소</button>
+      <a className={`btn btn-primary ${selected.length ? '' : 'is-disabled'}`} href={selected.length ? href : undefined} aria-disabled={!selected.length} download onClick={() => window.setTimeout(onClose, 300)}>
+        {format === 'pdf' ? 'PDF' : '엑셀'} 파일 받기{selected.length ? ` · ${selected.length}개 월` : ''}
+      </a>
+    </>}>
+    <div className="field">파일 형식
+      <div className="choices">
+        {choice('pdf', format, setFormat, 'PDF', '인쇄용 · 가로 A4')}
+        {choice('xlsx', format, setFormat, '엑셀', '월마다 시트 · 수정 가능')}
+      </div>
+    </div>
+    <div className="field">보기 방식
+      <div className="choices">
+        {choice('table', layout, setLayout, '월 표', '직원 × 날짜 표')}
+        {choice('calendar', layout, setLayout, '달력', '날짜별 오픈·마감·휴무')}
+      </div>
+    </div>
+    <div className="field">월 선택
+      {failed ? <p className="muted">{failed}</p> : !months ? <p className="muted">불러오는 중입니다.</p>
+        : <ul className="check-list">{months.map(month => <li key={month}>
+          <label className="check"><input type="checkbox" checked={selected.includes(month)} onChange={() => toggle(month)}/><span>{monthText(month)}{month === currentMonth && <small className="muted"> · 현재 보는 월</small>}</span></label>
+        </li>)}</ul>}
+    </div>
   </Modal>
 }

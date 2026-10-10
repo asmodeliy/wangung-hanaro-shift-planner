@@ -5,6 +5,8 @@ import { createServer } from 'node:http'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
 import postgres, { initializePostgres } from './postgres.js'
+import { buildScheduleWorkbook } from './export.js'
+import { buildSchedulePdf } from './exportPdf.js'
 import { defaultRules, defaultOperationRules, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -570,6 +572,53 @@ app.get('/api/holidays', async (req, res) => {
   const year = Number(req.query.year)
   if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: '연도를 확인해 주세요.' })
   res.json(holidaysFor(year, await readSettings()))
+})
+app.get('/api/export/months', async (_req, res) => {
+  const rows = await db.prepare('SELECT DISTINCT substr(shift_date, 1, 7) AS month FROM shifts ORDER BY month').all()
+  res.json(rows.map(row => row.month))
+})
+async function exportPayload(req) {
+  const requested = String(req.query.months ?? '').split(',').map(item => item.trim()).filter(Boolean)
+  if (!requested.length || requested.length > 24 || requested.some(month => !/^\d{4}-(0[1-9]|1[0-2])$/.test(month))) return { error: '내보낼 월을 선택해 주세요.' }
+  const layout = req.query.layout === 'calendar' ? 'calendar' : 'table'
+  const months = [...new Set(requested)].sort()
+  const settings = await readSettings()
+  const employees = (await db.prepare('SELECT id, name, employment_type AS employmentType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active FROM employees ORDER BY sort_order, id').all())
+    .map(employee => ({ ...employee, produceQualified: Boolean(employee.produceQualified), produceBackup: Boolean(employee.produceBackup), active: Boolean(employee.active) }))
+  const data = []
+  for (const month of months) {
+    const shifts = await db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id').all(`${month}-01`, `${nextMonth(month)}-01`)
+    const holidays = holidaysFor(Number(month.slice(0, 4)), settings).filter(item => item.date.startsWith(`${month}-`))
+    data.push({ month, employees, shifts, holidays, restTarget: restTarget(monthDates(month), holidays.map(item => item.date)) })
+  }
+  const times = settings.shiftTimes
+  const timeRows = [
+    { label: '오픈(정규직)', ...times.open.regular }, { label: '오픈(계약직)', ...times.open.contract },
+    { label: '마감(정규직)', ...times.close.regular }, { label: '마감(계약직)', ...times.close.contract },
+    { label: '농산 오픈', ...times.produceOpen },
+  ]
+  const label = layout === 'calendar' ? '달력' : '월표'
+  const base = `근무표_${label}_${months.length === 1 ? months[0] : `${months[0]}_${months.at(-1)}`}`
+  return { months: data, layout, timeRows, base }
+}
+const sendDownload = (res, buffer, type, filename) => {
+  res.setHeader('Content-Type', type)
+  res.setHeader('Content-Disposition', `attachment; filename="schedule"; filename*=UTF-8''${encodeURIComponent(filename)}`)
+  res.send(buffer)
+}
+app.get('/api/export/schedule.xlsx', async (req, res, next) => {
+  try {
+    const payload = await exportPayload(req)
+    if (payload.error) return res.status(400).json({ error: payload.error })
+    sendDownload(res, await buildScheduleWorkbook(payload), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', `${payload.base}.xlsx`)
+  } catch (error) { next(error) }
+})
+app.get('/api/export/schedule.pdf', async (req, res, next) => {
+  try {
+    const payload = await exportPayload(req)
+    if (payload.error) return res.status(400).json({ error: payload.error })
+    sendDownload(res, await buildSchedulePdf(payload), 'application/pdf', `${payload.base}.pdf`)
+  } catch (error) { next(error) }
 })
 app.get('/api/shifts', async (req, res) => {
   const month = String(req.query.month ?? '')

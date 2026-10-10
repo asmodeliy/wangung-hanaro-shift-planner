@@ -1,14 +1,19 @@
 import { useMemo } from 'react'
 import type { AppState } from '../hooks/useApp'
 import type { Employee } from '../types'
-import { dateKey, employmentLabel, isLockedDate, shiftHours, shiftText, weekdays } from '../lib/schedule'
+import { dateKey, employmentLabel, isLockedDate, shiftHours, shiftText, todayKey, weekdays } from '../lib/schedule'
 import { ShiftCell } from './ShiftCell'
 
 const dayTone = (weekday: number, holiday: boolean) => weekday === 0 || holiday ? 'is-sun' : weekday === 6 ? 'is-sat' : ''
 
 function StaffName({ employee, own, tone, compact = false }: { employee: Employee; own: boolean; tone: number; compact?: boolean }) {
-  if (compact) return <span className="staff-compact" title={`${employee.name} · ${employmentLabel(employee)}`}>
-    <b>{employee.name}{own && <em>나</em>}</b><small>{employmentLabel(employee)}</small>
+  if (compact) return <span className={`staff-compact ${employee.employmentType === '계약직' ? 'is-contract' : 'is-regular'}`} title={`${employee.name} · ${employmentLabel(employee)}`}>
+    <span className="staff-compact-name"><b>{employee.name}</b>{own && <em>나</em>}</span>
+    <span className="staff-compact-meta">
+      <small>{employmentLabel(employee)}</small>
+      {employee.produceQualified && <i className="staff-badge">농산</i>}
+      {employee.produceBackup && <i className="staff-badge">대직</i>}
+    </span>
   </span>
   return <span className="staff">
     <span className={`avatar tone-${tone % 5}`} aria-hidden="true">{employee.name.slice(-1)}</span>
@@ -54,7 +59,7 @@ export function MonthTable({ app }: { app: AppState }) {
     <table className="grid grid-month">
       <thead><tr>
         <th className="grid-staff">직원</th>
-        {monthSlots.map(slot => <th key={slot.date} className={`grid-day ${dayTone(slot.d.getDay(), holidayMap.has(slot.date))} ${visibleScheduleNotices.some(item => item.date === slot.date) ? 'has-warning' : ''}`} title={holidayMap.get(slot.date)}>
+        {monthSlots.map(slot => <th key={slot.date} className={`grid-day ${dayTone(slot.d.getDay(), holidayMap.has(slot.date))} ${slot.date === todayKey ? 'is-today' : ''} ${slot.d.getDay() === 1 ? 'is-week-start' : ''} ${visibleScheduleNotices.some(item => item.date === slot.date) ? 'has-warning' : ''}`} title={holidayMap.get(slot.date)}>
           <span>{weekdays[slot.d.getDay()]}</span><b>{slot.day}</b>
         </th>)}
         <th className="grid-total">합계</th>
@@ -65,7 +70,7 @@ export function MonthTable({ app }: { app: AppState }) {
           <th className="grid-staff"><StaffName employee={employee} own={own} tone={row} compact/></th>
           {monthSlots.map(slot => {
             const warn = visibleScheduleNotices.some(item => item.date === slot.date)
-            return <td key={slot.date} className={`grid-cell ${dayTone(slot.d.getDay(), holidayMap.has(slot.date))} ${warn ? 'has-warning' : ''}`}>
+            return <td key={slot.date} className={`grid-cell ${dayTone(slot.d.getDay(), holidayMap.has(slot.date))} ${slot.date === todayKey ? 'is-today' : ''} ${slot.d.getDay() === 1 ? 'is-week-start' : ''} ${warn ? 'has-warning' : ''}`}>
               <ShiftCell app={app} employee={employee} date={slot.date} day={slot.day} compact/>
             </td>
           })}

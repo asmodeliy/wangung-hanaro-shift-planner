@@ -207,3 +207,35 @@ test('employees cannot change settings and API omits private employment rules', 
   assert.ok(rows.every(e => !('employmentType' in e) && !('workRules' in e)))
   cookie = adminCookie
 })
+
+test('excel export creates one landscape sheet per selected month and rejects bad input', async () => {
+  const { default: ExcelJS } = await import('exceljs')
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-12-21', code: 'open' })).status, 200)
+  const months = (await call('/api/export/months')).data
+  assert.ok(months.includes('2026-12'))
+  const response = await fetch(`${baseUrl}/api/export/schedule.xlsx?months=2026-12,2027-01`, { headers: { Cookie: cookie } })
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type'), /spreadsheetml/)
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()))
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['2026년 12월', '2027년 1월'])
+  assert.equal(workbook.worksheets[0].pageSetup.orientation, 'landscape')
+  assert.equal(workbook.worksheets[0].getCell(5, 23).value, '오')
+  assert.equal((await call('/api/export/schedule.xlsx?months=2026-13')).status, 400)
+  assert.equal((await call('/api/export/schedule.xlsx')).status, 400)
+})
+
+test('pdf export is a real landscape A4 page for both table and calendar layouts', async () => {
+  for (const layout of ['table', 'calendar']) {
+    const response = await fetch(`${baseUrl}/api/export/schedule.pdf?layout=${layout}&months=2026-12,2027-01`, { headers: { Cookie: cookie } })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/pdf')
+    const text = Buffer.from(await response.arrayBuffer()).toString('latin1')
+    assert.ok(text.startsWith('%PDF'))
+    const boxes = [...text.matchAll(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/g)].map(match => [Number(match[1]), Number(match[2])])
+    assert.equal(boxes.length, 2, 'one page per month')
+    for (const [width, height] of boxes) assert.ok(width > height, 'page is landscape')
+    assert.ok(!/\/Rotate/.test(text), 'content is never rotated')
+  }
+  assert.equal((await fetch(`${baseUrl}/api/export/schedule.pdf?months=bad`, { headers: { Cookie: cookie } })).status, 400)
+})
