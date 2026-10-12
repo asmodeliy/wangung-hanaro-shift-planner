@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { User, Validation, Employee, ShiftCode, Shift, DayRequest, Account, Settings, PhotoImport, Holiday, ScheduleOption, ScheduleHistoryItem, Page } from '../types'
 import { todayKey, today, defaultSettings, monthLabel, monthKey, dateKey, isLockedDate, isActive } from '../lib/schedule'
 import { api } from '../lib/api'
@@ -28,6 +28,7 @@ export function useApp() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const toastTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const [dialog, setDialog] = useState<Employee | 'new' | null>(null)
   const [search, setSearch] = useState('')
   const [chosenDates, setChosenDates] = useState<string[]>([])
@@ -138,7 +139,17 @@ export function useApp() {
   const previewDays = scheduleOptions ? Array.from({ length: new Date(Number(scheduleOptions.month.slice(0, 4)), Number(scheduleOptions.month.slice(5, 7)), 0).getDate() }, (_, index) => index + 1) : []
   const previewShifts = useMemo(() => new Map((selectedOption?.shifts ?? []).map(shift => [`${shift.employeeId}:${shift.date}`, shift.code])), [selectedOption])
 
-  const toast = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 2600) }
+  const toast = (message: string) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
+    setNotice(message)
+    toastTimer.current = window.setTimeout(() => {
+      setNotice('')
+      toastTimer.current = null
+    }, 2600)
+  }
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current)
+  }, [])
   const openScheduleHistory = async () => {
     setShowScheduleHistory(true); setHistoryLoading(true)
     try { setScheduleHistory(await api<ScheduleHistoryItem[]>(`/api/shifts/history?month=${monthKey(month)}`)) }

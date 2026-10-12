@@ -2,7 +2,7 @@ import Holidays from 'date-holidays'
 import express from 'express'
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
@@ -14,79 +14,11 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
 const isHosted = process.env.VERCEL === '1'
-const Database = isHosted ? null : (await import('better-sqlite3')).default
-const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : isHosted ? path.join('/tmp', 'hanaro-data') : path.join(root, 'data')
+if (!process.env.DATABASE_URL) throw new Error('Neon 연결을 위해 DATABASE_URL 환경변수를 설정해 주세요.')
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data')
 mkdirSync(dataDir, { recursive: true })
-const databasePath = path.join(dataDir, 'shift-planner.sqlite')
-const seedDatabasePath = process.env.SEED_DATABASE_PATH ? path.resolve(root, process.env.SEED_DATABASE_PATH) : ''
-if (!isHosted && !existsSync(databasePath) && seedDatabasePath && existsSync(seedDatabasePath)) copyFileSync(seedDatabasePath, databasePath)
-const db = isHosted ? postgres : new Database(databasePath)
-if (!isHosted) {
-db.pragma('journal_mode = WAL')
-db.pragma('foreign_keys = ON')
-db.exec(`
-  CREATE TABLE IF NOT EXISTS employees (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    employment_type TEXT NOT NULL DEFAULT '정규직',
-    duty_type TEXT NOT NULL DEFAULT 'support',
-    produce_qualified INTEGER NOT NULL DEFAULT 0,
-    produce_backup INTEGER NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1,
-    notes TEXT NOT NULL DEFAULT '',
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS shifts (
-    employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-    shift_date TEXT NOT NULL,
-    code TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(employee_id, shift_date)
-  );
-  CREATE TABLE IF NOT EXISTS schedule_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    month TEXT NOT NULL,
-    username TEXT NOT NULL,
-    action TEXT NOT NULL,
-    snapshot TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS shift_locks (
-    employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-    shift_date TEXT NOT NULL,
-    code TEXT NOT NULL,
-    PRIMARY KEY(employee_id, shift_date)
-  );
-  CREATE TABLE IF NOT EXISTS locked_months (
-    month TEXT PRIMARY KEY,
-    locked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-    request_date TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(employee_id, request_date)
-  );
-  CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('admin', 'employee')),
-    employee_id INTEGER UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    expires_at INTEGER NOT NULL
-  );
-`)
-}
-if (isHosted) await initializePostgres()
+const db = postgres
+await initializePostgres()
 
 const defaultSettings = {
   shiftTimes: {
@@ -97,58 +29,48 @@ const defaultSettings = {
   daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], editablePastShiftDates: [], confirmedMonths: [], operations: { ...defaultOperationRules },
 }
 
-if (!isHosted) {
-const employeeCount = db.prepare('SELECT COUNT(*) AS n FROM employees').get().n
-const employeeColumns = new Set(db.prepare('PRAGMA table_info(employees)').all().map(column => column.name))
-if (!employeeColumns.has('work_rules')) db.exec("ALTER TABLE employees ADD COLUMN work_rules TEXT NOT NULL DEFAULT '{\"allowedShifts\":[\"open\",\"close\"],\"offRules\":[]}'")
-if (!employeeColumns.has('duty_type')) db.exec("ALTER TABLE employees ADD COLUMN duty_type TEXT NOT NULL DEFAULT 'support'")
-if (!employeeColumns.has('produce_qualified')) db.exec('ALTER TABLE employees ADD COLUMN produce_qualified INTEGER NOT NULL DEFAULT 0')
-if (!employeeColumns.has('produce_backup')) db.exec('ALTER TABLE employees ADD COLUMN produce_backup INTEGER NOT NULL DEFAULT 0')
-// Public demo seeds contain no personal employee information. Existing local data is preserved.
+const employeeCount = Number((await db.prepare('SELECT COUNT(*) AS n FROM employees').get()).n)
 if (employeeCount === 0) {
   const seedPath = path.join(dataDir, 'initial-employees.json')
-  const seed = existsSync(seedPath) ? JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')) : Array.from({ length: 7 }, (_, index) => ({ name: `직원 ${String.fromCharCode(65 + index)}`, employmentType: '정규직' }))
-  const insert = db.prepare('INSERT INTO employees (name, employment_type, duty_type, produce_qualified, work_rules, sort_order) VALUES (?, ?, ?, ?, ?, ?)')
-  db.transaction(() => seed.forEach((employee, index) => { insert.run(employee.name, employee.employmentType ?? '정규직', employee.dutyType ?? (employee.employmentType === '계약직' ? 'support' : 'functional'), employee.produceQualified ? 1 : 0, JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index) }))()
+  if (existsSync(seedPath)) {
+    const seed = JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, ''))
+    const insert = db.prepare('INSERT INTO employees (name, employment_type, duty_type, produce_qualified, produce_backup, work_rules, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    await db.transaction(async () => {
+      for (const [index, employee] of seed.entries()) await insert.run(employee.name, employee.employmentType ?? '정규직', employee.dutyType ?? (employee.employmentType === '계약직' ? 'support' : 'functional'), employee.produceQualified ? 1 : 0, employee.produceBackup ? 1 : 0, JSON.stringify(normalizeRules(employee.workRules ?? defaultRules)), index)
+    })()
+  }
 }
 
-if (!db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main')) {
+if (!(await db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('main'))) {
   const settings = structuredClone(defaultSettings)
   const seedPath = path.join(dataDir, 'initial-settings.json')
   if (existsSync(seedPath)) Object.assign(settings, JSON.parse(readFileSync(seedPath, 'utf8').replace(/^\uFEFF/, '')))
-  db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)').run('main', JSON.stringify(settings))
-}
+  await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?)').run('main', JSON.stringify(settings))
 }
 async function readSettings() {
-  try {
-    const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
-    if (!row) return structuredClone(defaultSettings)
-    const stored = JSON.parse(row.setting_value)
-    const savedTimes = stored.shiftTimes && typeof stored.shiftTimes === 'object' ? stored.shiftTimes : {}
-    const mergeShiftTime = (shift, type) => {
-      const value = savedTimes[shift]?.[type]
-      return { ...defaultSettings.shiftTimes[shift][type], ...(value && typeof value === 'object' ? value : {}) }
-    }
-    const settings = {
-      ...defaultSettings,
-      ...stored,
-      shiftTimes: {
-        open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
-        close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
-        produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
-      },
-      operations: { ...defaultOperationRules, ...(stored.operations ?? {}) },
-    }
-    delete settings.operations.avoidUnneededProduceBackup
-    settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
-    settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
-    settings.editablePastShiftDates = Array.isArray(settings.editablePastShiftDates) ? settings.editablePastShiftDates.filter(validDate) : []
-    return settings
+  const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
+  if (!row) return structuredClone(defaultSettings)
+  const stored = JSON.parse(row.setting_value)
+  const savedTimes = stored.shiftTimes && typeof stored.shiftTimes === 'object' ? stored.shiftTimes : {}
+  const mergeShiftTime = (shift, type) => {
+    const value = savedTimes[shift]?.[type]
+    return { ...defaultSettings.shiftTimes[shift][type], ...(value && typeof value === 'object' ? value : {}) }
   }
-  catch (error) {
-    if (isHosted) throw error
-    return structuredClone(defaultSettings)
+  const settings = {
+    ...defaultSettings,
+    ...stored,
+    shiftTimes: {
+      open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
+      close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
+      produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
+    },
+    operations: { ...defaultOperationRules, ...stored.operations },
   }
+  delete settings.operations.avoidUnneededProduceBackup
+  settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
+  settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
+  settings.editablePastShiftDates = Array.isArray(settings.editablePastShiftDates) ? settings.editablePastShiftDates.filter(validDate) : []
+  return settings
 }
 function shiftTimesForEmployee(employmentType, code, settings, produceQualified = false, produceBackup = false) {
   const type = employmentType === '계약직' ? 'contract' : 'regular'
@@ -165,9 +87,8 @@ function shiftTimesForEmployee(employmentType, code, settings, produceQualified 
 async function saveSettings(value) {
   await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run('main', JSON.stringify(value))
 }
-async function runTransaction(asyncWork, syncWork = asyncWork) {
-  if (isHosted) return db.transaction(asyncWork)()
-  return db.transaction(syncWork)()
+async function runTransaction(asyncWork) {
+  return db.transaction(asyncWork)()
 }
 const historyLimitPerMonth = 200
 function snapshotRange(month) { return [`${month}-01`, `${nextMonth(month)}-01`] }
@@ -224,20 +145,12 @@ async function photoIssues(month) {
   return data.month === month ? data.notes.filter(note => !note.resolved).map(note => ({ date: note.date, text: `사진 확인 필요: ${note.text}` })) : []
 }
 async function readDataJson(name) {
-  if (isHosted) {
-    const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(`file:${name}`)
-    return row ? JSON.parse(row.setting_value) : null
-  }
-  const file = path.join(dataDir, name)
-  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) : null
+  const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get(`file:${name}`)
+  return row ? JSON.parse(row.setting_value) : null
 }
 async function writeDataJson(name, value) {
   const contents = JSON.stringify(value, null, 2)
-  if (isHosted) {
-    await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run(`file:${name}`, contents)
-    return
-  }
-  writeFileSync(path.join(dataDir, name), contents, 'utf8')
+  await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run(`file:${name}`, contents)
 }
 function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`
@@ -255,9 +168,7 @@ function safeUser(user) {
 }
 
 const app = express()
-let dataRevision = 0
 async function currentDataRevision() {
-  if (!isHosted) return dataRevision
   return Number((await db.prepare("SELECT meta_value FROM app_meta WHERE meta_key = 'data_revision'").get())?.meta_value ?? 0)
 }
 app.use('/api', (req, res, next) => {
@@ -273,9 +184,7 @@ app.use('/api', (req, res, next) => {
     const sendAfterRevision = (send, args) => {
       if (!revisionSaved && res.statusCode < 400) {
         revisionSaved = true
-        const bump = isHosted
-          ? db.prepare("UPDATE app_meta SET meta_value = meta_value + 1 WHERE meta_key = 'data_revision'").run()
-          : Promise.resolve(++dataRevision)
+        const bump = db.prepare("UPDATE app_meta SET meta_value = meta_value + 1 WHERE meta_key = 'data_revision'").run()
         Promise.resolve(bump).then(() => send(...args)).catch(error => {
           console.error('Could not update the schedule revision', error)
           if (!res.headersSent) { res.statusCode = 500; originalJson({ error: '변경 사항을 기록하지 못했습니다.' }) }
@@ -381,17 +290,12 @@ app.get('/api/employees', async (req, res) => {
   res.json(rows)
 })
 app.get('/api/reference-schedule', requireAdmin, async (_req, res) => {
-  if (isHosted) {
-    const image = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png')
-    if (!image) return res.status(404).json({ error: '등록된 참고 이미지가 없습니다.' })
-    return res.type('png').send(Buffer.from(image.setting_value, 'base64'))
-  }
-  const referencePath = path.join(dataDir, 'reference-schedule.png')
-  if (!existsSync(referencePath)) return res.status(404).json({ error: '등록된 참고 이미지가 없습니다.' })
-  res.type('png').sendFile(referencePath)
+  const image = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png')
+  if (!image) return res.status(404).json({ error: '등록된 참고 이미지가 없습니다.' })
+  res.type('png').send(Buffer.from(image.setting_value, 'base64'))
 })
 app.get('/api/reference-schedule/status', requireAdmin, async (_req, res) => {
-  const image = isHosted ? await db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png') : existsSync(path.join(dataDir, 'reference-schedule.png'))
+  const image = await db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png')
   res.json({ available: Boolean(image) })
 })
 app.get('/api/reference-schedule/import', requireAdmin, async (_req, res) => {
@@ -753,7 +657,7 @@ app.post('/api/requests', async (req, res) => {
     }
   }
   const insert = db.prepare("INSERT INTO requests (employee_id, request_date) VALUES (?, ?) ON CONFLICT(employee_id, request_date) DO UPDATE SET status = 'pending'")
-  await runTransaction(async () => { for (const date of uniqueDates) await insert.run(employeeId, date) }, () => uniqueDates.forEach(date => insert.run(employeeId, date)))
+  await runTransaction(async () => { for (const date of uniqueDates) await insert.run(employeeId, date) })
   res.status(201).json({ ok: true })
 })
 app.patch('/api/requests/:id', requireAdmin, async (req, res) => {
@@ -856,13 +760,7 @@ app.post('/api/shifts/reset', requireAdmin, async (req, res, next) => {
     const lockedThroughDate = seoulDateKey()
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
     let backupPath
-    if (isHosted) backupPath = await db.backup(`${month}-before-reset-${stamp}`)
-    else {
-      const backupDir = path.join(dataDir, 'backups')
-      mkdirSync(backupDir, { recursive: true })
-      backupPath = path.join(backupDir, `${month}-before-reset-${stamp}.sqlite`)
-      await db.backup(backupPath)
-    }
+    backupPath = await db.backup(`${month}-before-reset-${stamp}`)
 
     const currentImport = await readDataJson('reference-import.json')
     if (currentImport?.month === month) {
@@ -881,7 +779,7 @@ app.post('/api/shifts/reset', requireAdmin, async (req, res, next) => {
         AND NOT EXISTS (SELECT 1 FROM shift_locks l WHERE l.employee_id = shifts.employee_id AND l.shift_date = shifts.shift_date)`).run(lockedThroughDate, `${month}-01`, `${nextMonth(month)}-01`).changes
     })
     await invalidateConfirmed()
-    res.json({ ok: true, month, deleted: result, preservedThrough: lockedThroughDate, backup: isHosted ? backupPath : path.relative(root, backupPath).replaceAll('\\', '/') })
+    res.json({ ok: true, month, deleted: result, preservedThrough: lockedThroughDate, backup: backupPath })
   } catch (error) { next(error) }
 })
 let generating = false
@@ -1006,13 +904,7 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
     let backupPath
     if (mode === 'rebalance') {
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
-      if (isHosted) backupPath = await db.backup(`${month}-before-rebalance-${stamp}`)
-      else {
-        const backupDir = path.join(dataDir, 'backups')
-        mkdirSync(backupDir, { recursive: true })
-        backupPath = path.join(backupDir, `${month}-before-rebalance-${stamp}.sqlite`)
-        await db.backup(backupPath)
-      }
+      backupPath = await db.backup(`${month}-before-rebalance-${stamp}`)
     }
     await runTransaction(async () => {
       await recordScheduleHistory(month, req.user.username, `자동 편성 (${mode})`)
@@ -1030,7 +922,7 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
       for (const entry of result.shifts) if (entry.date > lockedThroughDate || existingCells.has(`${entry.employeeId}:${entry.date}`)) insert.run(entry.employeeId, entry.date, entry.code)
     })
     await invalidateConfirmed()
-    res.json({ ok: true, targetRestDays: result.targetRestDays, assignments: result.shifts.length - skippedLockedBlanks.length, warnings, optimal: result.optimal, backup: backupPath ? isHosted ? backupPath : path.relative(root, backupPath).replaceAll('\\', '/') : undefined })
+    res.json({ ok: true, targetRestDays: result.targetRestDays, assignments: result.shifts.length - skippedLockedBlanks.length, warnings, optimal: result.optimal, backup: backupPath })
   } catch (error) { next(error) }
   finally { generating = false }
 })

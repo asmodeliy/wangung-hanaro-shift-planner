@@ -44,8 +44,8 @@ function App() {
         <button className="icon-btn" onClick={() => setNavOpen(open => !open)} aria-label="메뉴 열기" aria-expanded={navOpen}><Icon name="menu" size={19}/></button>
         <span className="topbar-title">{pageTitle[page]}</span>
         <span className="spacer"/>
-        <button className="btn btn-ghost btn-sm" onClick={() => { setError(''); setShowPasswordDialog(true) }}><Icon name="key" size={15}/>비밀번호 변경</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => void logout()}><Icon name="logout" size={15}/>로그아웃</button>
+        <button className="btn btn-ghost btn-sm topbar-action" aria-label="비밀번호 변경" onClick={() => { setError(''); setShowPasswordDialog(true) }}><Icon name="key" size={15}/><span className="topbar-label">비밀번호 변경</span></button>
+        <button className="btn btn-ghost btn-sm topbar-action" aria-label="로그아웃" onClick={() => void logout()}><Icon name="logout" size={15}/><span className="topbar-label">로그아웃</span></button>
       </header>
       <main className="content">
         {error && <div className="alert alert-error" role="alert"><p>{error}</p><button className="btn btn-sm" onClick={() => setError('')}>확인</button></div>}

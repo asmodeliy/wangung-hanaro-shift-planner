@@ -1,21 +1,25 @@
-import { after, before, test } from 'node:test'
+import { after, before, test as nodeTest } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 
 let child, folder, baseUrl, cookie
+const test = (name, fn) => nodeTest(name, { skip: !process.env.TEST_DATABASE_URL }, fn)
 const systemNode = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'node.exe') : process.execPath
 async function call(url, method = 'GET', body, auth = true) {
   const response = await fetch(baseUrl + url, { method, headers: { 'Content-Type': 'application/json', ...(auth && cookie ? { Cookie: cookie } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   return { status: response.status, data: response.status === 204 ? null : await response.json(), cookie: response.headers.getSetCookie().at(-1)?.split(';')[0] }
 }
 before(async () => {
+  if (!process.env.TEST_DATABASE_URL) return
   folder = await mkdtemp(path.join(os.tmpdir(), 'shift-planner-api-test-'))
-  child = spawn(existsSync(systemNode) ? systemNode : process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: folder, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const employees = Array.from({ length: 7 }, (_, index) => ({ name: `테스트 직원${index + 1}`, employmentType: index < 3 ? '정규직' : '계약직' }))
+  await writeFile(path.join(folder, 'initial-employees.json'), JSON.stringify(employees))
+  child = spawn(existsSync(systemNode) ? systemNode : process.execPath, ['server/index.js'], { env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, DATA_DIR: folder, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] })
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Test server did not start')), 30000)
     child.stdout.on('data', buffer => { const match = buffer.toString().match(/http:\/\/127\.0\.0\.1:(\d+)/); if (match) { baseUrl = `http://127.0.0.1:${match[1]}`; clearTimeout(timer); resolve() } })

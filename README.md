@@ -1,6 +1,6 @@
 # 왕궁농협 하나로마트 근무표
 
-Vite, React, Express, SQLite로 만든 왕궁농협 하나로마트 직원 근무 관리 웹앱입니다. 서버 PC의 로컬 SQLite 파일에 직원, 계정, 근무표, 희망휴무를 저장합니다.
+Vite, React, Express, Neon PostgreSQL로 만든 왕궁농협 하나로마트 직원 근무 관리 웹앱입니다. 데스크톱 앱과 Vercel 배포가 같은 Neon 데이터베이스를 사용합니다.
 
 ## 시작하기
 
@@ -10,15 +10,15 @@ Node.js 22.12 이상이 설치된 서버 PC에서 실행합니다.
 npm run app
 ```
 
-`npm run app`은 첫 실행에 패키지를 준비하고 화면을 빌드한 뒤 Electron 데스크톱 창을 엽니다. 창을 닫으면 서버도 종료됩니다. 터미널에서 실행 중이라면 `Ctrl+C`로 종료할 수 있습니다. 패키지 설치와 실행을 따로 하려면 `npm install`, `npm run build`, `npm start`를 사용할 수도 있습니다. Windows에서 npm을 인식하지 못하면 터미널을 다시 열고 `npm.cmd run app`을 실행하세요.
+`npm run app`은 첫 실행에 패키지를 준비하고 화면을 빌드한 뒤 Electron 데스크톱 창을 엽니다. 앱은 프로젝트 루트의 `.env.development.local`과 `.env.local`에서 `DATABASE_URL`을 읽습니다. Vercel 프로젝트에 연결된 Neon을 쓸 때는 `npx vercel env pull .env.development.local`로 Development 연결 정보를 가져오세요. 같은 항목이 두 파일에 있으면 `.env.local` 값이 우선합니다. 터미널에서 실행 중이라면 `Ctrl+C`로 종료할 수 있습니다. Windows에서 npm을 인식하지 못하면 터미널을 다시 열고 `npm.cmd run app`을 실행하세요.
 
 앱 창에서 근무표를 사용합니다. 필요하면 같은 PC 브라우저에서 `http://localhost:3001`로 접속할 수도 있습니다. 최초 관리자 계정은 서버 PC에서 한 번 설정합니다. 아이디는 영문/숫자 기준 3자 이상, 비밀번호는 10자 이상이어야 합니다. 직원 계정은 관리자 화면의 직원 관리에서 발급합니다.
 
 ## 휴대폰에서 접속
 
-서버는 기본값으로 `0.0.0.0:3001`에서 요청을 받습니다. 서버 PC와 휴대폰이 같은 Tailscale 계정 또는 Tailnet에 연결되어 있으면, 휴대폰 브라우저에서 `http://<서버 PC의 Tailscale IP>:3001`을 엽니다. 공용 인터넷에 포트를 직접 열지 말고 Tailscale 안에서 사용하세요.
+앱 서버는 기본값으로 `0.0.0.0:3001`에서 요청을 받습니다. 서버 PC와 휴대폰이 같은 Tailscale 계정 또는 Tailnet에 연결되어 있으면, 휴대폰 브라우저에서 `http://<서버 PC의 Tailscale IP>:3001`을 엽니다. 데스크톱 앱과 Vercel 앱은 같은 Neon 데이터를 보므로 동일 계정으로 사용할 수 있습니다. 공용 인터넷에 포트를 직접 열지 말고 Tailscale 안에서 사용하세요.
 
-서버 PC에서 개발 화면을 직접 사용할 때는 `npm run dev`를 실행합니다. 화면 개발 서버는 Vite 기본 포트에서 열리고 `/api` 요청은 3001번 서버로 전달됩니다.
+서버 PC에서 개발 화면을 직접 사용할 때는 한 터미널에서 `npm run server`, 다른 터미널에서 `npm run dev`를 실행합니다. 화면 개발 서버는 Vite 기본 포트에서 열리고 `/api` 요청은 Neon에 연결된 3001번 서버로 전달됩니다.
 
 ## 기능
 
@@ -54,11 +54,11 @@ npm run app
 
 ## 데이터와 백업
 
-운영 데이터는 `data/shift-planner.sqlite`에 저장됩니다. 월 초기화 전 데이터베이스 백업은 `data/backups`에 저장됩니다. 일정 화면의 **변경 이력**에서 월별 근무 변경 전 상태를 확인하고 복원할 수 있으며, 복원 직전 상태도 새 이력으로 남아 다시 되돌릴 수 있습니다. `data/backups/schedule-snapshots.json`에서 이름이 지정된 전체 DB 스냅샷을 확인할 수 있습니다. 초기화 때 지운 사진 근무표와 확인 메모는 `data/reference-import-history.json`에 보관합니다. 별도 안전한 백업으로 `data` 폴더 전체도 복사하세요.
+운영 데이터의 단일 원본은 연결된 Neon PostgreSQL 데이터베이스입니다. 근무표 초기화나 재편성 전 백업은 Neon의 `app_backups`에 저장됩니다. 일정 화면의 **변경 이력**에서 월별 근무 변경 전 상태를 확인하고 복원할 수 있으며, 복원 직전 상태도 새 이력으로 남아 다시 되돌릴 수 있습니다. 사진 근무표와 가져오기 기록도 Neon에 저장됩니다. Neon의 자동 백업과 별도로 정기적인 데이터베이스 백업을 설정하세요.
 
-Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다. 직원 명단, 근무조건, 현재 배정과 운영설정을 담고 있으며 사용자 계정과 로그인 세션은 제거했습니다. 사용자 계정은 별도 환경에서 생성해야 합니다.
+기존 로컬 데이터 파일 `data/shift-planner.sqlite`와 배포 시드 `deployment/shift-planner.sqlite`는 이전용으로 보존합니다. 새 앱은 이 파일에 쓰지 않습니다. `npm run db:migrate`는 기본적으로 `data/shift-planner.sqlite`의 직원, 근무, 설정, 계정, 변경 이력과 참고 파일을 Neon에 한 번 병합합니다. 같은 직원은 이름으로 연결하므로 SQLite와 Neon에서 직원 ID 순서가 달라도 근무가 다른 직원에게 붙지 않습니다. 충돌하는 직원 정보, 근무, 신청, 설정은 SQLite 원본 값을 적용하고 Neon에만 있는 다른 데이터는 유지합니다. 병합 전에 Neon 현재 상태를 `app_backups`에 백업하며, 같은 원본의 중복 실행을 막습니다. 병합 후에는 Neon만 계속 사용하고 이전 SQLite와 `data/backups`는 보관하세요.
 
-관리자 일정 화면의 수기 근무표 참고 이미지는 `data/reference-schedule.png`에 둘 수 있습니다. 계정이 있는 관리자에게만 제공되며 Git에는 포함되지 않습니다.
+이전 SQLite 파일을 옮길 때 같은 `data` 폴더의 사진 근무표와 사진 가져오기 확인 기록도 함께 가져옵니다.
 
 최초 직원 명단을 지정하려면 서버 시작 전에 `data/initial-employees.json`에 직원별 `name`, `employmentType`, 선택적으로 `workRules`를 저장할 수 있습니다. 초기 설정은 `data/initial-settings.json`에 저장합니다. 이 파일들은 최초 빈 DB에만 적용하며 기존 운영 데이터를 덮어쓰지 않습니다. 직원의 특이사항 메모는 설명용이고, 실제 자동편성 조건은 직원 수정 화면의 **가능한 근무 / 정기휴무**에서 설정하세요.
 
@@ -68,7 +68,7 @@ Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다.
 
 ## 검증
 
-`npm test`는 자동편성·주간 휴무·정기휴무·기존 배정 보존·확정 API·권한 검증을 수행합니다. API 테스트는 임시 DB를 사용하며 운영 데이터를 변경하지 않습니다. `npm run build`와 `npm run lint`로 화면 빌드와 정적 검사를 실행합니다.
+`npm test`에는 자동편성·주간 휴무·정기휴무·확정 API 검증이 있습니다. API 테스트는 기존 임시 SQLite DB 구성을 전제로 하므로 Neon 단일 DB 전환에 맞춰 테스트 환경을 별도로 정리해야 합니다. `npm run build`와 `npm run lint`로 화면 빌드와 정적 검사를 실행합니다.
 
 ## 네트워크 참고
 
@@ -76,10 +76,10 @@ Git에는 배포 시작용 `deployment/shift-planner.sqlite`만 포함합니다.
 
 ## 클라우드 호스팅
 
-Vercel 프로젝트 `wangung-hanaro-shift-planner`와 싱가포르 리전의 Neon 데이터베이스를 연결했습니다. 배포 시작용 SQLite의 직원 7명, 근무 161건, 운영 설정을 Neon으로 한 번 가져왔으며 사용자 계정과 세션은 비어 있습니다. Neon 연결 환경변수는 Vercel의 Production, Preview, Development 환경에 등록되어 있습니다.
+Vercel 프로젝트 `wangung-hanaro-shift-planner`와 싱가포르 리전의 Neon 데이터베이스를 연결했습니다. 서버와 데스크톱 앱 모두 Neon만 사용합니다. Neon 연결 환경변수는 Vercel의 Production, Preview, Development 환경에 등록되어 있습니다.
 
-현재 Express API는 동기식 `better-sqlite3`와 로컬 파일을 사용하므로 Vercel에 배포할 준비가 끝나지 않았습니다. 배포 전 API 데이터 접근을 비동기 PostgreSQL로 바꾸고 최초 관리자 계정 설정 흐름을 서버리스 환경에 맞춰야 합니다. Vercel 함수의 로컬 파일은 영구 데이터 저장소로 사용할 수 없습니다. [Vercel 저장소 안내](https://vercel.com/docs/storage), [Neon 연동 안내](https://neon.tech/docs/guides/vercel-native-integration).
+Vercel 함수의 임시 파일시스템은 운영 데이터 저장소로 사용하지 않습니다. 직원, 계정, 일정, 설정과 첨부 데이터는 Neon에 저장합니다. [Neon 연동 안내](https://neon.tech/docs/guides/vercel-native-integration).
 
-새 Neon 데이터베이스에 초기 데이터를 가져올 때는 Vercel CLI로 로그인·프로젝트 연결 후 `npx vercel env pull .env.development.local`을 실행하고 `npm run db:migrate:neon`을 실행합니다. 이 스크립트는 대상 DB에 운영 데이터가 있으면 덮어쓰지 않고 중단합니다. `.env.development.local`에는 DB 비밀값이 있으므로 Git에 추가하지 마세요.
+로컬 앱을 Neon에 연결할 때는 Vercel CLI로 프로젝트를 연결한 뒤 `npx vercel env pull .env.development.local`을 실행합니다. 앱은 풀링 연결 `DATABASE_URL`을 사용하고, DB 이전 명령은 direct 연결 `DATABASE_URL_UNPOOLED`를 사용합니다. 이 파일에는 DB 비밀값이 있으므로 Git에 추가하지 마세요. 기존 SQLite 자료를 Neon에 병합할 때 `npm run db:migrate`를 한 번 실행합니다. 겹치는 일정의 기준은 SQLite 원본이며, Neon은 병합 직전 백업을 저장합니다.
 
 배포 후에는 관리자가 최초 계정을 만들고, **운영 설정 → 관리자 계정**에서 두 번째 관리자를 추가해야 합니다.

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AppState } from '../hooks/useApp'
 import { api } from '../lib/api'
 import { dateKey, monthLabel, requestStatusText, weekdays } from '../lib/schedule'
@@ -13,6 +13,8 @@ export function RequestsPage({ app }: { app: AppState }) {
   const targetId = isAdmin ? Number(employeeId || activeEmployees[0]?.id || 0) : null
   const leading = new Date(month.getFullYear(), month.getMonth(), 1).getDay()
   const rules = settings.operations
+
+  useEffect(() => { setChosenDates([]) }, [month, setChosenDates])
 
   const submit = async () => {
     if (!isAdmin) return submitRequests()

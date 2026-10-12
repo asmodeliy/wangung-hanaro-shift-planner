@@ -5,12 +5,12 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "app": "node scripts/app.js",
+    "app": "node --env-file-if-exists=.env.development.local --env-file-if-exists=.env.local scripts/app.js",
     "test": "node --test server/*.test.js",
     "dev": "vite",
-    "server": "node server/index.js",
-    "start": "node server/index.js",
-    "db:migrate:neon": "node --env-file=.env.development.local scripts/migrate-neon.mjs",
+    "server": "node --env-file-if-exists=.env.development.local --env-file-if-exists=.env.local server/index.js",
+    "start": "node --env-file-if-exists=.env.development.local --env-file-if-exists=.env.local server/index.js",
+    "db:migrate": "node --env-file-if-exists=.env.development.local --env-file-if-exists=.env.local scripts/migrate-neon.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

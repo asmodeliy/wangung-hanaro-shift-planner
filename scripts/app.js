@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 process.chdir(root)
-// Prefer the installed system runtime so npm start and npm run app share one SQLite ABI.
+// Prefer the installed system runtime so npm start and npm run app use one Node environment.
 const systemNode = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'node.exe') : null
 const lts = process.platform === 'win32' && process.env.LOCALAPPDATA
   ? path.join(process.env.LOCALAPPDATA, 'Programs', 'NodeLTS', 'node-v24.21.0-win-x64', 'node.exe') : null
@@ -21,11 +21,6 @@ if (!existsSync(path.join(root, 'node_modules', 'vite', 'bin', 'vite.js')) || !e
   const npmCli = path.join(path.dirname(runtime), 'node_modules', 'npm', 'bin', 'npm-cli.js')
   if (!existsSync(npmCli)) { console.error('먼저 npm install을 실행해 주세요.'); process.exit(1) }
   run([npmCli, 'ci'])
-}
-const nativeCheck = spawnSync(runtime, ['--input-type=module', '-e', 'import Database from "better-sqlite3"; new Database(":memory:").close()'], { cwd: root, stdio: 'ignore' })
-if (nativeCheck.status !== 0) {
-  console.log('현재 Node 버전에 맞춰 데이터베이스 모듈을 준비합니다.')
-  run([path.join(path.dirname(runtime), 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'rebuild', 'better-sqlite3'])
 }
 console.log('근무표 화면을 빌드합니다.')
 run(['node_modules/typescript/bin/tsc', '-b'])
