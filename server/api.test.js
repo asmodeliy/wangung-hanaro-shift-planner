@@ -174,6 +174,19 @@ test('manager can pin one manually selected shift cell for alternative generatio
   rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
   assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, false)
 })
+test('manager cannot manually assign the same regular employee full shifts on both weekend days', async () => {
+  const saturday = '2026-12-05'
+  const sunday = '2026-12-06'
+  try {
+    assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: saturday, code: 'full' })).status, 200)
+    const repeated = await call('/api/shifts', 'PUT', { employeeId: 1, date: sunday, code: 'full' })
+    assert.equal(repeated.status, 422)
+    assert.match(repeated.data.error, /토·일 연속 종일근무할 수 없습니다/)
+  } finally {
+    await call('/api/shifts', 'PUT', { employeeId: 1, date: saturday, code: '' })
+    await call('/api/shifts', 'PUT', { employeeId: 1, date: sunday, code: '' })
+  }
+})
 test('manager gets distinct complete automatic schedule options and can apply one', async () => {
   const month = '2026-12'
   const result = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: 0 })
@@ -186,6 +199,13 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.ok(result.data.options.every(option => !option.warnings.some(warning => /정규직 없음|동시휴무 제한 위반|미편성/.test(warning))), JSON.stringify(result.data.options.map(option => ({ warnings: option.warnings, issues: option.issues }))))
   for (const date of Array.from({ length: 31 }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) {
     assert.ok(result.data.options.every(option => option.shifts.filter(shift => shift.date === date && shift.code === 'full' && shift.employeeId <= 3).length === 1), `${date} should have exactly one regular full shift`)
+  }
+  for (const saturday of Array.from({ length: 31 }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`).filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 6)) {
+    const sunday = new Date(`${saturday}T00:00:00Z`)
+    sunday.setUTCDate(sunday.getUTCDate() + 1)
+    const sundayKey = sunday.toISOString().slice(0, 10)
+    if (!sundayKey.startsWith(`${month}-`)) continue
+    for (const option of result.data.options) assert.notEqual(option.shifts.find(shift => shift.date === saturday && shift.code === 'full')?.employeeId, option.shifts.find(shift => shift.date === sundayKey && shift.code === 'full')?.employeeId, `${saturday} and ${sundayKey} must have different regular employees`)
   }
   assert.ok(result.data.explored >= 3 && result.data.explored <= 6, 'the search may explore a second batch to replace rejected candidates')
   assert.equal(result.data.nextOffset, result.data.explored)
@@ -200,6 +220,17 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.equal(invalidApply.status, 422)
   assert.match(invalidApply.data.error, /정규직 전원이 쉬는 날짜/)
   assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid options must not be saved')
+  const saturdayFull = result.data.options[0].shifts.find(shift => shift.date === '2026-12-05' && shift.code === 'full')
+  const sundayFull = result.data.options[0].shifts.find(shift => shift.date === '2026-12-06' && shift.code === 'full')
+  const consecutiveFull = result.data.options[0].shifts.map(shift => {
+    if (shift.date === '2026-12-06' && shift.employeeId === sundayFull.employeeId) return { ...shift, code: 'open' }
+    if (shift.date === '2026-12-06' && shift.employeeId === saturdayFull.employeeId) return { ...shift, code: 'full' }
+    return shift
+  })
+  const invalidWeekendApply = await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: consecutiveFull, revision: result.data.revision, confirmIssues: true })
+  assert.equal(invalidWeekendApply.status, 422)
+  assert.match(invalidWeekendApply.data.error, /토·일 연속 종일근무/)
+  assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid weekend options must not be saved')
   assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision, confirmIssues: result.data.options[0].issues.length > 0 })).status, 200)
   assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
 })

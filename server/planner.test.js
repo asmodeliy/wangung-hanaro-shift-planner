@@ -15,7 +15,24 @@ test('baseline covers both regular shifts, exact monthly quota and weekly minimu
   const input = base()
   const result = await generateSchedule(input)
   verify(input, result)
-  for (const date of monthDates(input.month).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) assert.equal(result.shifts.filter(shift => shift.date === date && shift.code === 'full' && input.employees.some(employee => employee.id === shift.employeeId && employee.employmentType === '정규직')).length, 1)
+  const regulars = input.employees.filter(employee => employee.employmentType === '정규직')
+  for (const date of monthDates(input.month).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) assert.equal(result.shifts.filter(shift => shift.date === date && shift.code === 'full' && regulars.some(employee => employee.id === shift.employeeId)).length, 1)
+  for (const saturday of monthDates(input.month).filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 6)) {
+    const sunday = new Date(`${saturday}T00:00:00Z`)
+    sunday.setUTCDate(sunday.getUTCDate() + 1)
+    const sundayKey = sunday.toISOString().slice(0, 10)
+    if (monthDates(input.month).includes(sundayKey)) {
+      const saturdayFull = result.shifts.find(shift => shift.date === saturday && shift.code === 'full')
+      const sundayFull = result.shifts.find(shift => shift.date === sundayKey && shift.code === 'full')
+      assert.notEqual(saturdayFull?.employeeId, sundayFull?.employeeId, `${saturdayFull?.employeeId} must not work full shifts both ${saturday} and ${sundayKey}`)
+    }
+  }
+})
+test('validator catches the same regular employee assigned full shifts on Saturday and Sunday', () => {
+  const input = { ...base(), month: '2026-02' }
+  const shifts = monthDates(input.month).flatMap(date => input.employees.map(employee => ({ employeeId: employee.id, date, code: employee.id === 1 && ['2026-02-07', '2026-02-08'].includes(date) ? 'full' : employee.id === 2 ? 'open' : employee.id === 3 ? 'close' : 'off' })))
+  const result = validateSchedule({ ...input, shifts })
+  assert.ok(result.issues.some(issue => issue.text.includes('2026-02-07~2026-02-08 직원1 주말 연속 종일근무')))
 })
 test('turning off the weekend regular full-shift rule disables generated full shifts', async () => {
   const input = base()

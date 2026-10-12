@@ -608,8 +608,16 @@ app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
   if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
   if (date < seoulDateKey() && !(await readSettings()).editablePastShiftDates.includes(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
-  if (!await db.prepare('SELECT id FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
+  const employeeRecord = await db.prepare('SELECT id, employment_type AS employmentType FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))
+  if (!employeeRecord) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
+  const settings = await readSettings()
+  if (code === 'full' && employeeRecord.employmentType === '정규직' && settings.operations.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
+    const pairedDate = new Date(`${date}T00:00:00Z`)
+    pairedDate.setUTCDate(pairedDate.getUTCDate() + (pairedDate.getUTCDay() === 6 ? 1 : -1))
+    const pairedKey = pairedDate.toISOString().slice(0, 10)
+    if ((await db.prepare("SELECT 1 FROM shifts WHERE employee_id = ? AND shift_date = ? AND code = 'full'").get(employee, pairedKey))) return res.status(422).json({ error: `${employeeRecord.employmentType} 직원은 토·일 연속 종일근무할 수 없습니다. 주말 종일 담당자를 다르게 배정해 주세요.` })
+  }
   if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
   const previous = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employee, date)
   if ((previous?.code ?? '') === code) return res.json({ ok: true })
@@ -838,6 +846,11 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
           for (const date of monthDates(month).filter(date => regularEmployees.length > 0 && regularEmployees.every(employee => !result.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code !== 'off')))) rejectedIssues.add(`${date} 정규직 전원 휴무`)
           continue
         }
+        const hasConsecutiveWeekendFull = input.settings.operations.weekendRegularFullShift && issues.some(issue => issue.text.includes('주말 연속 종일근무'))
+        if (hasConsecutiveWeekendFull) {
+          for (const issue of issues.filter(issue => issue.text.includes('주말 연속 종일근무'))) rejectedIssues.add(issue.text)
+          continue
+        }
         if (issues.length) {
           for (const issue of issues) rejectedIssues.add(issue.text)
           bestEffortOptions.push(option)
@@ -880,6 +893,7 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     const regularEmployees = input.employees.filter(employee => employee.employmentType === '정규직')
     const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !shifts.some(shift => Number(shift.employeeId) === employee.id && shift.date === date && shift.code !== 'off')))
     if (hasAllRegularOffDay) return res.status(422).json({ error: '정규직 전원이 쉬는 날짜가 포함된 편성안은 적용할 수 없습니다.' })
+    if (input.settings.operations.weekendRegularFullShift && issues.some(issue => issue.text.includes('주말 연속 종일근무'))) return res.status(422).json({ error: '같은 정규직의 토·일 연속 종일근무가 포함된 편성안은 적용할 수 없습니다.' })
     if (issues.length && req.body?.confirmIssues !== true) return res.status(422).json({ error: `필수 운영 규칙 위반 ${issues.length}건이 있습니다. 확인 후 다시 적용해 주세요. ${[...new Set(issues.map(issue => issue.text))].slice(0, 3).join(' · ')}` })
     const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
     await runTransaction(async () => {
