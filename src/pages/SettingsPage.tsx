@@ -16,6 +16,7 @@ const splitFields: [NumericOperation, string][] = [
 ]
 const ruleFields: [NumericOperation, string, string][] = [
   ['minimumEmployeesForGeneration', '자동 편성 최소 재직 인원', '명'],
+  ['monthlyRestDays', '월 고정 기준 휴무', '일'],
   ['functionalMinOnDuty', '일반직 최소 출근', '명'],
   ['supportMaxOff', '계약직 최대 휴무', '명'],
   ['supportMaxRequestsPerDate', '계약직 날짜별 희망휴무 한도', '명'],
@@ -24,6 +25,11 @@ const ruleFields: [NumericOperation, string, string][] = [
   ['maxWishDaysPerEmployee', '월 희망휴무 한도 (0은 제한 없음)', '일'],
   ['requestDueDay', '희망휴무 취합일', '일'],
   ['publishDay', '근무표 공유일', '일'],
+]
+const priorityFields: [NumericOperation, string][] = [
+  ['approvedWishWeight', '승인 희망휴무 우선도'], ['pendingWishWeight', '대기 희망휴무 우선도'],
+  ['weeklyRestBalanceWeight', '주간 휴무 분산'], ['weekendRestFairnessWeight', '주말·공휴일 휴무 형평성'],
+  ['shiftRotationWeight', '전월 연계 오픈·마감 순환'], ['openCloseBalanceWeight', '일별 오픈·마감 인원 균형'],
 ]
 
 function TimeRow({ label, kind, value, onChange }: { label: string; kind: string; value: Times; onChange: (next: Times) => void }) {
@@ -96,10 +102,21 @@ export function SettingsPage({ app }: { app: AppState }) {
       </section>
 
       <section className="panel pad">
+        <h2>월 휴무 산정</h2>
+        <label className="field">직원별 기준 휴무 산정 방식
+          <select value={ops.monthlyRestMode} onChange={event => setOp('monthlyRestMode', event.target.value as Operations['monthlyRestMode'])}>
+            <option value="weekendHolidayCount">월 주말·공휴일 수에 맞춤</option>
+            <option value="fixed">매월 같은 일수</option>
+          </select>
+        </label>
+        {ops.monthlyRestMode === 'fixed' && <p className="muted small">고정 일수는 편성 규칙에서 지정합니다.</p>}
+      </section>
+
+      <section className="panel pad">
         <h2>편성 규칙</h2>
         <div className="number-grid">
-          {ruleFields.map(([field, label, unit]) => <label className="field" key={field}>{label}
-            <span className="unit"><input type="number" min={field === 'requestDueDay' || field === 'publishDay' ? 1 : 0} max={['requestDueDay', 'publishDay', 'maxConsecutiveWorkDays', 'maxWishDaysPerEmployee'].includes(field) ? 31 : 100}
+          {ruleFields.filter(([field]) => field !== 'monthlyRestDays' || ops.monthlyRestMode === 'fixed').map(([field, label, unit]) => <label className="field" key={field}>{label}
+            <span className="unit"><input type="number" min={field === 'requestDueDay' || field === 'publishDay' ? 1 : 0} max={['requestDueDay', 'publishDay', 'maxConsecutiveWorkDays', 'maxWishDaysPerEmployee', 'monthlyRestDays'].includes(field) ? 31 : 100}
               value={ops[field]} onChange={event => setOp(field, Number(event.target.value))}/>{unit}</span>
           </label>)}
         </div>
@@ -107,6 +124,18 @@ export function SettingsPage({ app }: { app: AppState }) {
         <label className="check"><input type="checkbox" checked={ops.requireProduceOpener} onChange={event => setOp('requireProduceOpener', event.target.checked)}/><span>매일 농산 담당자 또는 대직자 오픈 배치</span></label>
         <label className="check"><input type="checkbox" checked={ops.noConsecutiveClose} onChange={event => setOp('noConsecutiveClose', event.target.checked)}/><span>일반직은 마감을 이틀 연속 하지 않음 <small className="muted">마감 → 마감 금지</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.noFullCloseAdjacent} onChange={event => setOp('noFullCloseAdjacent', event.target.checked)}/><span>일반직은 종일과 마감을 연달아 하지 않음 <small className="muted">종일 → 마감, 마감 → 종일 금지</small></span></label>
+        <label className="check"><input type="checkbox" checked={ops.allowFullShiftGeneration} onChange={event => setOp('allowFullShiftGeneration', event.target.checked)}/><span>자동편성에서 종일 근무 허용 <small className="muted">켜면 한 사람이 오픈과 마감을 함께 담당할 수 있습니다.</small></span></label>
+      </section>
+
+      <section className="panel pad">
+        <h2>편성 우선순위</h2>
+        <p className="muted small">0은 해당 항목을 우선하지 않는다는 뜻입니다. 높은 값일수록 더 우선합니다. 인원 최소 기준과 고정 배정을 먼저 고려합니다. 조건이 충돌하면 편성 경고를 확인하세요.</p>
+        <div className="number-grid">
+          {priorityFields.map(([field, label]) => <label className="field" key={field}>{label}
+            <span className="unit"><input type="number" min={0} max={100} value={ops[field]} onChange={event => setOp(field, Number(event.target.value))}/>점</span>
+          </label>)}
+        </div>
+        <p className="muted small">기본값은 승인 희망휴무를 대기 신청보다 3배 우선합니다. 다른 조건이 충돌하면 충족 가능한 기준과 편성 경고를 확인하세요.</p>
       </section>
 
       <section className="panel pad">

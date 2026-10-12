@@ -120,7 +120,10 @@ export function useApp() {
   })
   const shiftMap = useMemo(() => new Map(shifts.map(s => [`${s.employeeId}:${s.date}`, s])), [shifts])
   const holidayMap = useMemo(() => new Map(holidays.map(h => [h.date, h.name])), [holidays])
-  const restTarget = useMemo(() => Array.from({ length: dayCount }, (_, i) => { const date = dateKey(new Date(month.getFullYear(), month.getMonth(), i + 1)); const weekday = new Date(`${date}T12:00:00`).getDay(); return weekday === 0 || weekday === 6 || holidayMap.has(date) ? 1 : 0 }).reduce<number>((a, b) => a + b, 0), [dayCount, month, holidayMap])
+  const restTarget = useMemo(() => settings.operations.monthlyRestMode === 'fixed'
+    ? settings.operations.monthlyRestDays
+    : Array.from({ length: dayCount }, (_, i) => { const date = dateKey(new Date(month.getFullYear(), month.getMonth(), i + 1)); const weekday = new Date(`${date}T12:00:00`).getDay(); return weekday === 0 || weekday === 6 || holidayMap.has(date) ? 1 : 0 }).reduce<number>((a, b) => a + b, 0),
+  [dayCount, month, holidayMap, settings.operations.monthlyRestMode, settings.operations.monthlyRestDays])
   const pendingCount = requests.filter(item => item.status === 'pending').length
   const workCount = shifts.filter(item => item.code === 'open' || item.code === 'close' || item.code === 'full').length
   const confirmed = settings.confirmedMonths.includes(monthKey(month))

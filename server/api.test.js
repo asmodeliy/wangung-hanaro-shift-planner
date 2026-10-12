@@ -136,6 +136,10 @@ test('generation with fewer than three active staff preserves existing assignmen
   await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })
   for (const employeeId of [3, 4, 5, 6, 7]) await call(`/api/employees/${employeeId}`, 'PUT', { name: `직원${employeeId}`, employmentType: '계약직', active: false, notes: '' })
   const beforeRows = (await call('/api/shifts?month=2026-10')).data
+  const options = await call('/api/shifts/options', 'POST', { month: '2026-10', mode: 'replace' })
+  assert.equal(options.status, 422)
+  assert.match(options.data.error, /재직 직원 3명 이상/)
+  assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
   const result = await call('/api/shifts/generate', 'POST', { month: '2026-10', mode: 'replace' })
   assert.equal(result.status, 422)
   assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
@@ -166,6 +170,26 @@ test('manager can pin one manually selected shift cell for alternative generatio
   rows = await call(`/api/shifts?month=${date.slice(0, 7)}`)
   assert.equal(rows.data.find(row => row.employeeId === 1 && row.date === date).locked, false)
 })
+test('manager gets distinct complete automatic schedule options and can apply one', async () => {
+  const month = '2026-12'
+  const result = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: 0 })
+  assert.equal(result.status, 200, result.data?.error)
+  assert.equal(result.data.exhaustive, false)
+  assert.ok(result.data.options.length > 1, 'different seeds should produce multiple alternatives')
+  const signatures = result.data.options.map(option => option.shifts.map(item => `${item.employeeId}:${item.date}:${item.code}`).join('|'))
+  assert.equal(new Set(signatures).size, signatures.length)
+  assert.ok(result.data.options.every(option => option.shifts.length === 7 * 31))
+  assert.equal(result.data.explored, 3)
+  assert.equal(result.data.nextOffset, 3)
+  const more = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: result.data.nextOffset })
+  assert.equal(more.status, 200, more.data?.error)
+  const allSignatures = [...signatures, ...more.data.options.map(option => option.shifts.map(item => `${item.employeeId}:${item.date}:${item.code}`).join('|'))]
+  assert.equal(new Set(allSignatures).size, allSignatures.length, 'continuing the search should not repeat earlier alternatives')
+  assert.equal(more.data.explored, 6)
+  assert.equal(more.data.nextOffset, 6)
+  assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision })).status, 200)
+  assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
+})
 test('manager can select employment type staffing and invalid split floors are rejected', async () => {
   const original = (await call('/api/settings')).data
   const operations = {
@@ -176,6 +200,20 @@ test('manager can select employment type staffing and invalid split floors are r
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
   assert.equal((await call('/api/settings')).data.operations.staffingMode, 'employmentType')
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, weekdayContractMinimum: 4 } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
+})
+test('manager can configure every additional automatic scheduling rule', async () => {
+  const original = (await call('/api/settings')).data
+  const operations = {
+    ...original.operations, monthlyRestMode: 'fixed', monthlyRestDays: 10,
+    allowFullShiftGeneration: true, approvedWishWeight: 5, pendingWishWeight: 2,
+    weeklyRestBalanceWeight: 0, weekendRestFairnessWeight: 75, shiftRotationWeight: 30, openCloseBalanceWeight: 60,
+  }
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
+  assert.deepEqual((await call('/api/settings')).data.operations, operations)
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestMode: 'invalid' } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestDays: 32 } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, approvedWishWeight: -1 } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })
 test('manager can change a named employee employment type and produce assignment', async () => {

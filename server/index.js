@@ -453,17 +453,19 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     const operations = { ...settings.operations, ...incoming.operations }
     const ranges = {
       minimumEmployeesForGeneration: [0, 100],
+      monthlyRestDays: [0, 31],
       weekdayTarget: [0, 100], weekendTarget: [0, 100], weekdayMinimum: [0, 100], weekendMinimum: [0, 100],
       weekdayRegularTarget: [0, 100], weekdayRegularMinimum: [0, 100], weekdayContractTarget: [0, 100], weekdayContractMinimum: [0, 100],
       weekendRegularTarget: [0, 100], weekendRegularMinimum: [0, 100], weekendContractTarget: [0, 100], weekendContractMinimum: [0, 100],
       functionalMinOnDuty: [0, 100], supportMaxOff: [0, 100], produceOpenCount: [0, 100],
       maxConsecutiveWorkDays: [0, 31], maxWishDaysPerEmployee: [0, 31], supportMaxRequestsPerDate: [0, 100], requestDueDay: [1, 31], publishDay: [1, 31],
+      approvedWishWeight: [0, 100], pendingWishWeight: [0, 100], weeklyRestBalanceWeight: [0, 100], weekendRestFairnessWeight: [0, 100], shiftRotationWeight: [0, 100], openCloseBalanceWeight: [0, 100],
     }
-    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || typeof operations.requireProduceOpener !== 'boolean' || typeof operations.noConsecutiveClose !== 'boolean' || typeof operations.noFullCloseAdjacent !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
+    if (!operations || typeof operations !== 'object' || Array.isArray(operations) || typeof operations.requireRegularEachShift !== 'boolean' || typeof operations.requireProduceOpener !== 'boolean' || typeof operations.noConsecutiveClose !== 'boolean' || typeof operations.noFullCloseAdjacent !== 'boolean' || typeof operations.allowFullShiftGeneration !== 'boolean' || !['combined', 'employmentType'].includes(operations.staffingMode) || !['weekendHolidayCount', 'fixed'].includes(operations.monthlyRestMode)) return res.status(400).json({ error: '운영 기준을 확인해 주세요.' })
     for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(operations[key]) || operations[key] < min || operations[key] > max) return res.status(400).json({ error: '운영 기준의 인원 수와 날짜를 확인해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
     for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, requireRegularEachShift: operations.requireRegularEachShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent }
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: operations.allowFullShiftGeneration }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()
@@ -493,7 +495,7 @@ async function exportPayload(req) {
   for (const month of months) {
     const shifts = await db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id').all(`${month}-01`, `${nextMonth(month)}-01`)
     const holidays = holidaysFor(Number(month.slice(0, 4)), settings).filter(item => item.date.startsWith(`${month}-`))
-    data.push({ month, employees, shifts, holidays, restTarget: restTarget(monthDates(month), holidays.map(item => item.date)) })
+    data.push({ month, employees, shifts, holidays, restTarget: restTarget(monthDates(month), holidays.map(item => item.date), settings.operations) })
   }
   const times = settings.shiftTimes
   const timeRows = [
@@ -820,9 +822,11 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
       seen.add(signature)
       options.push({ id: options.length + 1, shifts: result.shifts, warnings: result.warnings ?? [], optimal: result.optimal })
     }
+    const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error
+    if (!options.length && plannerError) return res.status(422).json({ error: plannerError })
     if (revision !== await currentDataRevision()) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
     if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
-    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays), options, exhaustive: false, explored: offset + explored, nextOffset: offset + explored, revision })
+    res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays, input.settings.operations), options, exhaustive: false, explored: offset + explored, nextOffset: offset + explored, revision })
   } catch (error) { next(error) }
   finally { generating = false }
 })

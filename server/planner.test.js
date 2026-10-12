@@ -200,8 +200,9 @@ test('conflicting store staffing rules produce a best-effort schedule and identi
   assert.equal(result.error, undefined)
   assert.equal(result.shifts.length, 7 * 31)
   assert.equal(result.shifts.find(shift => shift.employeeId === 3 && shift.date === '2026-10-19').code, 'open')
-  assert.ok(result.warnings.some(warning => warning.includes('기준휴무')))
-  assert.ok(result.warnings.some(warning => warning.includes('권장 근무인원')))
+  const validation = validateSchedule({ ...input, shifts: result.shifts })
+  assert.equal(result.warnings.some(warning => warning.includes('기준휴무')), validation.issues.some(issue => issue.text.includes('기준휴무')))
+  assert.equal(result.warnings.some(warning => warning.includes('권장 근무인원')), validation.warnings.some(warning => warning.text.includes('권장 근무인원')))
   assert.ok(!result.warnings.some(warning => warning.includes('동시에 만족할 수 없습니다')))
 })
 test('cross-month week includes already assigned adjacent rest', async () => {
@@ -217,6 +218,62 @@ test('holiday weekends count once; leap days and real dates validate', () => {
   assert.equal(validDate('2026-02-30'), false)
   assert.equal(validDate('2028-02-29'), true)
   assert.throws(() => normalizeRules({ allowedShifts: [], offRules: [] }))
+})
+test('monthly rest can follow the calendar or a manager-selected fixed amount', () => {
+  const dates = monthDates('2026-02')
+  assert.equal(restTarget(dates, []), 8)
+  assert.equal(restTarget(dates, [], { monthlyRestMode: 'fixed', monthlyRestDays: 10 }), 10)
+  assert.equal(restTarget(dates, ['2026-02-02'], { monthlyRestMode: 'weekendHolidayCount' }), 9)
+})
+test('generated full shifts follow the manager option and each employee shift permissions', async () => {
+  const onlyEmployee = { ...structuredClone(employees[0]), dutyType: 'other' }
+  const forcedFull = {
+    month: '2026-02', employees: [onlyEmployee], holidays: [],
+    settings: { daysOffPairs: [], operations: {
+      minimumEmployeesForGeneration: 1, monthlyRestMode: 'fixed', monthlyRestDays: 0,
+      weekdayTarget: 1, weekendTarget: 1, weekdayMinimum: 1, weekendMinimum: 1,
+      functionalMinOnDuty: 0, supportMaxOff: 0, requireProduceOpener: false,
+      allowFullShiftGeneration: true, openCloseBalanceWeight: 0,
+    } },
+  }
+  const allowed = await generateSchedule(forcedFull)
+  assert.equal(allowed.error, undefined)
+  assert.ok(allowed.shifts.every(shift => shift.code === 'full'), 'full shifts must satisfy both shifts when no separate staff can cover them')
+  assert.deepEqual(validateSchedule({ ...forcedFull, shifts: allowed.shifts }).issues, [])
+
+  const input = base()
+  const disabledInput = { ...input, settings: { ...input.settings, operations: { ...input.settings.operations, allowFullShiftGeneration: false } } }
+  const disabled = await generateSchedule(disabledInput)
+  verify(disabledInput, disabled)
+  assert.equal(disabled.shifts.some(shift => shift.code === 'full'), false)
+})
+test('alternative search produces distinct valid schedules across seeds', async () => {
+  const input = base()
+  const results = []
+  for (const seed of [7717, 112466, 217215]) {
+    const result = await generateSchedule({ ...input, seed })
+    verify(input, result)
+    results.push(result)
+  }
+  const signatures = new Set(results.map(result => result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')))
+  assert.equal(signatures.size, results.length, 'alternative search should not return duplicate assignments')
+})
+test('manager priority weights from disabled to maximum produce complete valid plans', async () => {
+  for (const weight of [0, 100]) {
+    const input = {
+      ...base(), requests: [
+        { employeeId: 1, date: '2026-02-05', status: 'approved' },
+        { employeeId: 2, date: '2026-02-06', status: 'pending' },
+      ],
+    }
+    input.settings.operations = {
+      ...input.settings.operations,
+      approvedWishWeight: weight, pendingWishWeight: 100 - weight,
+      weeklyRestBalanceWeight: weight, weekendRestFairnessWeight: weight,
+      shiftRotationWeight: weight, openCloseBalanceWeight: weight,
+    }
+    verify(input, await generateSchedule(input))
+  }
 })
 test('manager produce-open exception is honored by schedule validation', () => {
   const input = {
