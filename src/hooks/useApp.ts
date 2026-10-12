@@ -18,7 +18,7 @@ export function useApp() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [validation, setValidation] = useState<Validation>({ issues: [], pending: [], stats: [] })
   const [generating, setGenerating] = useState(false)
-  const [scheduleOptions, setScheduleOptions] = useState<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; nextOffset: number; revision: number } | null>(null)
+  const [scheduleOptions, setScheduleOptions] = useState<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; bestEffort: boolean; exhaustive: false; explored: number; nextOffset: number; revision: number } | null>(null)
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null)
   const [showScheduleHistory, setShowScheduleHistory] = useState(false)
   const [scheduleHistory, setScheduleHistory] = useState<ScheduleHistoryItem[]>([])
@@ -230,7 +230,7 @@ export function useApp() {
     setGenerating(true); setError('')
     try {
       const monthValue = monthKey(month)
-      const result = await api<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; exhaustive: false; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: monthValue, mode, offset: 0 }) })
+      const result = await api<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; bestEffort: boolean; exhaustive: false; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: monthValue, mode, offset: 0 }) })
       setScheduleOptions(result)
       setSelectedOptionId(result.options[0]?.id ?? null)
     } catch (e) { setError(e instanceof Error ? e.message : '자동 편성 결과를 만들지 못했습니다.') } finally { setGenerating(false) }
@@ -239,20 +239,28 @@ export function useApp() {
     if (!scheduleOptions) return
     setGenerating(true); setError('')
     try {
-      const result = await api<{ options: ScheduleOption[]; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: scheduleOptions.month, mode: scheduleOptions.mode, offset: scheduleOptions.nextOffset }) })
+      const result = await api<{ options: ScheduleOption[]; bestEffort: boolean; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: scheduleOptions.month, mode: scheduleOptions.mode, offset: scheduleOptions.nextOffset }) })
       setScheduleOptions(current => {
         if (!current) return current
         const known = new Set(current.options.map(option => option.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')))
         const added = result.options.filter(option => !known.has(option.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|'))).map((option, index) => ({ ...option, id: current.options.length + index + 1 }))
-        return { ...current, options: [...current.options, ...added], explored: result.explored, nextOffset: result.nextOffset, revision: result.revision }
+        const options = [...current.options, ...added]
+        return { ...current, options, bestEffort: options.every(option => option.issues.length > 0) && result.bestEffort, explored: result.explored, nextOffset: result.nextOffset, revision: result.revision }
       })
     } catch (e) { setError(e instanceof Error ? e.message : '추가 대안을 찾지 못했습니다.') } finally { setGenerating(false) }
   }
   const applyScheduleOption = async (option: ScheduleOption) => {
+    const hasIssues = option.issues.length > 0
+    if (hasIssues) {
+      const examples = option.issues.slice(0, 5).join('\n')
+      const more = option.issues.length > 5 ? `\n외 ${option.issues.length - 5}건` : ''
+      if (!window.confirm(`필수 운영 규칙을 모두 만족한 안을 찾지 못했습니다.\n\n선택한 안의 위반 ${option.issues.length}건을 확인하고 적용할까요?\n${examples}${more}`)) return
+    }
     try {
-      await api('/api/shifts/apply-option', { method: 'POST', body: JSON.stringify({ month: scheduleOptions?.month, mode: scheduleOptions?.mode, shifts: option.shifts, revision: scheduleOptions?.revision }) })
+      await api('/api/shifts/apply-option', { method: 'POST', body: JSON.stringify({ month: scheduleOptions?.month, mode: scheduleOptions?.mode, shifts: option.shifts, revision: scheduleOptions?.revision, confirmIssues: hasIssues }) })
       setScheduleOptions(null); await load()
-      if (option.warnings.length) setError(`선택한 편성안을 적용했습니다. 확인할 조건: ${option.warnings.slice(0, 6).join(' · ')}${option.warnings.length > 6 ? ` 외 ${option.warnings.length - 6}건` : ''}`)
+      if (hasIssues) setError(`규칙 위반 ${option.issues.length}건을 포함한 편성안을 적용했습니다. 근무표의 확인 항목을 검토해 주세요.`)
+      else if (option.warnings.length) setError(`선택한 편성안을 적용했습니다. 확인할 조건: ${option.warnings.slice(0, 6).join(' · ')}${option.warnings.length > 6 ? ` 외 ${option.warnings.length - 6}건` : ''}`)
       else toast(`대안 ${option.id}을 근무표에 적용했습니다.`)
     } catch (e) { setError(e instanceof Error ? e.message : '선택한 편성안을 적용하지 못했습니다.') }
   }

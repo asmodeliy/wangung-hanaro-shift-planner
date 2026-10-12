@@ -14,6 +14,6 @@ export type NumericOperation = Exclude<keyof Operations, 'requireRegularEachShif
 export type Settings = { shiftTimes: Record<'open' | 'close', Record<'regular' | 'contract', Times>> & { produceOpen: Times }; daysOffPairs: { employeeIds: number[] }[]; additionalHolidays: string[]; produceOpenExceptions: string[]; editablePastShiftDates: string[]; confirmedMonths: string[]; operations: Operations }
 export type PhotoImport = { month: string; entries: { employeeId: number; date: string; code: ShiftCode }[]; notes: { id: number; date: string; text: string; resolved: boolean }[] }
 export type Holiday = { date: string; name: string }
-export type ScheduleOption = { id: number; shifts: { employeeId: number; date: string; code: ShiftCode }[]; warnings: string[]; optimal: boolean }
+export type ScheduleOption = { id: number; shifts: { employeeId: number; date: string; code: ShiftCode }[]; warnings: string[]; issues: string[]; optimal: boolean }
 export type ScheduleHistoryItem = { id: number; month: string; username: string; action: string; createdAt: string; shiftCount: number }
 export type Page = 'schedule' | 'requests' | 'employees' | 'settings'
