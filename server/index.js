@@ -810,21 +810,26 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const input = { ...await planningInput(month), mode, lockedThroughDate: seoulDateKey(), alternativeSearch: true }
     const options = []
     const seen = new Set()
+    const rejectedIssues = new Set()
     const results = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + (offset + attempt) * 104729 }, 55_000)))
     const explored = results.length
     for (const attempt of results) {
       if (attempt.status !== 'fulfilled' || attempt.value.error) continue
       const result = attempt.value
-      const hardIssues = validateSchedule({ ...input, shifts: result.shifts }).issues.filter(issue => issue.text.includes('미편성'))
-      if (hardIssues.length) continue
+      const issues = validateSchedule({ ...input, shifts: result.shifts }).issues
+      if (issues.length) {
+        for (const issue of issues) rejectedIssues.add(issue.text)
+        continue
+      }
       const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
       if (seen.has(signature)) continue
       seen.add(signature)
-      options.push({ id: options.length + 1, shifts: result.shifts, warnings: result.warnings ?? [], optimal: result.optimal })
+      options.push({ id: options.length + 1, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal })
     }
     const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error
     if (!options.length && plannerError) return res.status(422).json({ error: plannerError })
     if (revision !== await currentDataRevision()) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
+    if (!options.length && rejectedIssues.size) return res.status(422).json({ error: `필수 운영 규칙을 충족하는 대안을 찾지 못했습니다. 후보에서 위반 ${rejectedIssues.size}건을 발견했습니다. 예: ${[...rejectedIssues].slice(0, 3).join(' · ')}. 인원·고정 근무·휴무 조건을 확인한 뒤 다시 탐색해 주세요.` })
     if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
     res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays, input.settings.operations), options, exhaustive: false, explored: offset + explored, nextOffset: offset + explored, revision })
   } catch (error) { next(error) }
@@ -844,8 +849,8 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     const employeeIds = new Set(input.employees.map(employee => employee.id))
     if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'full', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
     if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
-    const issues = validateSchedule({ ...input, shifts }).issues.filter(issue => issue.text.includes('미편성'))
-    if (issues.length) return res.status(422).json({ error: '편성안에 미입력된 칸이 있습니다.' })
+    const issues = validateSchedule({ ...input, shifts }).issues
+    if (issues.length) return res.status(422).json({ error: `필수 운영 규칙을 위반한 편성안은 적용할 수 없습니다. ${[...new Set(issues.map(issue => issue.text))].slice(0, 3).join(' · ')}` })
     const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
     await runTransaction(async () => {
       await recordScheduleHistory(month, req.user.username, '자동 편성안 적용')
@@ -896,8 +901,7 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
     if (revision !== await currentDataRevision()) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요. 기존 근무표는 유지됩니다.' })
     const validation = validateSchedule({ ...input, shifts: result.shifts })
     const regularCoverageGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
-    const hardIssues = validation.issues.filter(issue => issue.text.includes('미편성'))
-    if (hardIssues.length) return res.status(422).json({ error: `검증 실패: ${hardIssues.slice(0, 3).map(issue => issue.text).join(' · ')}` })
+    if (validation.issues.length) return res.status(422).json({ error: `필수 운영 규칙을 충족하지 못해 근무표를 저장하지 않았습니다. ${[...new Set(validation.issues.map(issue => issue.text))].slice(0, 3).join(' · ')}` })
     const warnings = [...(result.warnings ?? [])]
     if (regularCoverageGaps.length && !warnings.some(warning => warning.includes('정규직 오픈·마감 배치'))) {
       warnings.unshift(`월 휴무 기준을 유지해 정규직 오픈·마감 배치가 ${regularCoverageGaps.length}회 부족합니다. ${regularCoverageGaps.map(issue => issue.text).join(' · ')} 해당 근무는 가능한 직원으로 편성했습니다.`)

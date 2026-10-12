@@ -133,17 +133,21 @@ test('manager can save date-level produce open exceptions', async () => {
 })
 test('generation with fewer than three active staff preserves existing assignments', async () => {
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)
+  const originals = (await call('/api/employees')).data.filter(employee => [3, 4, 5, 6, 7].includes(employee.id))
   await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })
-  for (const employeeId of [3, 4, 5, 6, 7]) await call(`/api/employees/${employeeId}`, 'PUT', { name: `직원${employeeId}`, employmentType: '계약직', active: false, notes: '' })
+  for (const employee of originals) await call(`/api/employees/${employee.id}`, 'PUT', { ...employee, employmentType: '계약직', active: false })
   const beforeRows = (await call('/api/shifts?month=2026-10')).data
-  const options = await call('/api/shifts/options', 'POST', { month: '2026-10', mode: 'replace' })
-  assert.equal(options.status, 422)
-  assert.match(options.data.error, /재직 직원 3명 이상/)
-  assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
-  const result = await call('/api/shifts/generate', 'POST', { month: '2026-10', mode: 'replace' })
-  assert.equal(result.status, 422)
-  assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
-  for (const employeeId of [3, 4, 5, 6, 7]) await call(`/api/employees/${employeeId}`, 'PUT', { name: `직원${employeeId}`, employmentType: '계약직', active: true, notes: '' })
+  try {
+    const options = await call('/api/shifts/options', 'POST', { month: '2026-10', mode: 'replace' })
+    assert.equal(options.status, 422)
+    assert.match(options.data.error, /재직 직원 3명 이상/)
+    assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
+    const result = await call('/api/shifts/generate', 'POST', { month: '2026-10', mode: 'replace' })
+    assert.equal(result.status, 422)
+    assert.deepEqual((await call('/api/shifts?month=2026-10')).data, beforeRows)
+  } finally {
+    for (const employee of originals) assert.equal((await call(`/api/employees/${employee.id}`, 'PUT', employee)).status, 200)
+  }
 })
 test('locking existing shifts protects filled cells while allowing blank cells to be assigned', async () => {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(Date.now() + 7 * 86400000)
@@ -179,6 +183,7 @@ test('manager gets distinct complete automatic schedule options and can apply on
   const signatures = result.data.options.map(option => option.shifts.map(item => `${item.employeeId}:${item.date}:${item.code}`).join('|'))
   assert.equal(new Set(signatures).size, signatures.length)
   assert.ok(result.data.options.every(option => option.shifts.length === 7 * 31))
+  assert.ok(result.data.options.every(option => !option.warnings.some(warning => /정규직 없음|동시휴무 제한 위반|미편성/.test(warning))))
   assert.equal(result.data.explored, 3)
   assert.equal(result.data.nextOffset, 3)
   const more = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: result.data.nextOffset })
@@ -187,8 +192,38 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.equal(new Set(allSignatures).size, allSignatures.length, 'continuing the search should not repeat earlier alternatives')
   assert.equal(more.data.explored, 6)
   assert.equal(more.data.nextOffset, 6)
+  const allRegularOff = result.data.options[0].shifts.map(shift => shift.employeeId <= 3 && shift.date === `${month}-10` ? { ...shift, code: 'off' } : shift)
+  const invalidApply = await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: allRegularOff, revision: result.data.revision })
+  assert.equal(invalidApply.status, 422)
+  assert.match(invalidApply.data.error, /필수 운영 규칙을 위반/)
+  assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid options must not be saved')
   assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision })).status, 200)
   assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
+})
+test('manager does not receive automatic options that violate regular shift coverage', async () => {
+  const originals = (await call('/api/employees')).data.filter(employee => employee.employmentType === '정규직')
+  const beforeRows = (await call('/api/shifts?month=2026-12')).data
+  assert.equal(originals.length, 3)
+  try {
+    for (const employee of originals) {
+      const result = await call(`/api/employees/${employee.id}`, 'PUT', { ...employee, workRules: { ...employee.workRules, allowedShifts: ['open'] } })
+      assert.equal(result.status, 200)
+    }
+    const options = await call('/api/shifts/options', 'POST', { month: '2026-12', mode: 'replace' })
+    assert.equal(options.status, 422)
+    assert.match(options.data.error, /필수 운영 규칙/)
+    assert.match(options.data.error, /정규직 없음|불가능한 근무 배정/)
+    assert.deepEqual((await call('/api/shifts?month=2026-12')).data, beforeRows, 'invalid options must not replace the current schedule')
+    const generation = await call('/api/shifts/generate', 'POST', { month: '2026-12', mode: 'replace' })
+    assert.equal(generation.status, 422)
+    assert.match(generation.data.error, /필수 운영 규칙을 충족하지 못해/)
+    assert.deepEqual((await call('/api/shifts?month=2026-12')).data, beforeRows, 'invalid direct generation must not replace the current schedule')
+  } finally {
+    for (const employee of originals) {
+      const result = await call(`/api/employees/${employee.id}`, 'PUT', employee)
+      assert.equal(result.status, 200)
+    }
+  }
 })
 test('manager can select employment type staffing and invalid split floors are rejected', async () => {
   const original = (await call('/api/settings')).data

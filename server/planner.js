@@ -279,6 +279,8 @@ export async function generateSchedule(input) {
   const weekendFairnessSlacks = []
   const seededTieBreakVars = []
   const preferredGapPenalties = []
+  const requestPreferenceVars = []
+  const requestPreferenceObjectiveVars = []
   // Preferences are optimized only after all staffing, rest and employee rules hold.
   const preferenceScale = 1000 * employees.length * dates.length
   const approvedWeight = rules.approvedWishWeight
@@ -373,7 +375,13 @@ export async function generateSchedule(input) {
     lp.bounds.push({ name: deviation, type: glpk.GLP_LO, lb: 0, ub: 0 })
     lp.objective.vars.push({ name: deviation, coef: 1 })
   }
-  for (const request of requests) lp.objective.vars.push(variable(request.employeeId, request.date, 'off', -preferenceScale * (request.status === 'approved' ? approvedWeight : pendingWeight)))
+  for (const request of requests) {
+    const weight = request.status === 'approved' ? approvedWeight : pendingWeight
+    const preference = variable(request.employeeId, request.date, 'off', -preferenceScale * weight)
+    lp.objective.vars.push(preference)
+    requestPreferenceObjectiveVars.push(preference)
+    requestPreferenceVars.push({ ...preference, coef: -Math.min(1, weight / 100) })
+  }
   const addFairnessPenalty = (name, expression, constant, target, weight) => {
     const deviation = `fair_${name}`
     lp.bounds.push({ name: deviation, type: glpk.GLP_LO, lb: 0, ub: 0 })
@@ -493,25 +501,45 @@ export async function generateSchedule(input) {
     const validation = validateSchedule({ ...input, shifts })
     return { shifts, targetRestDays: target, optimal: false, missedRequests: [], minimumDailyStaffingShortfall: 0, minimumFallbackStaffingShortfall: 0, warnings: [...validation.issues.map(issue => issue.text), ...validation.warnings.map(issue => issue.text), '자동편성 계산 한계에 도달해 기존 배정과 가능한 근무 인원을 기준으로 기본 근무표를 만들었습니다. 표시된 휴무·인원 기준을 확인해 주세요.'] }
   }
-  const minimumStaffingGaps = Math.round(regularStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumDailyStaffingShortfall = Math.round(dailyStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumFallbackStaffingShortfall = Math.round(fallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumSplitFallbackShortfall = Math.round(splitFallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumSplitTargetShortfall = Math.round(splitTargetStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumRuleViolations = Math.round(ruleViolationSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumDailyImbalance = Math.round(dailyShiftImbalanceSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-  const minimumWeeklyRestSpread = weeklyRestSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
-  const minimumWeekendFairnessDeviation = weekendFairnessSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
-  eq(fallbackStaffingSlacks, minimumFallbackStaffingShortfall)
-  eq(splitFallbackStaffingSlacks, minimumSplitFallbackShortfall)
-  eq(splitTargetStaffingSlacks, minimumSplitTargetShortfall)
-  eq(regularStaffingSlacks, minimumStaffingGaps)
-  eq(dailyStaffingSlacks, minimumDailyStaffingShortfall)
-  eq(ruleViolationSlacks, minimumRuleViolations)
-  if (rules.openCloseBalanceWeight > 0) eq(dailyShiftImbalanceSlacks, minimumDailyImbalance)
-  if (rules.weeklyRestBalanceWeight > 0) eq(weeklyRestSlacks, minimumWeeklyRestSpread)
-  if (rules.weekendRestFairnessWeight > 0) eq(weekendFairnessSlacks, minimumWeekendFairnessDeviation)
-  lp.objective.vars.push(...ruleViolationSlacks)
+  const staffingIsOptimal = staffingSolution.result.status === glpk.GLP_OPT
+  if (staffingIsOptimal) {
+    const minimumStaffingGaps = Math.round(regularStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumDailyStaffingShortfall = Math.round(dailyStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumFallbackStaffingShortfall = Math.round(fallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumSplitFallbackShortfall = Math.round(splitFallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumSplitTargetShortfall = Math.round(splitTargetStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumRuleViolations = Math.round(ruleViolationSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumDailyImbalance = Math.round(dailyShiftImbalanceSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumWeeklyRestSpread = weeklyRestSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
+    const minimumWeekendFairnessDeviation = weekendFairnessSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
+    eq(fallbackStaffingSlacks, minimumFallbackStaffingShortfall)
+    eq(splitFallbackStaffingSlacks, minimumSplitFallbackShortfall)
+    eq(splitTargetStaffingSlacks, minimumSplitTargetShortfall)
+    eq(regularStaffingSlacks, minimumStaffingGaps)
+    eq(dailyStaffingSlacks, minimumDailyStaffingShortfall)
+    eq(ruleViolationSlacks, minimumRuleViolations)
+    if (rules.openCloseBalanceWeight > 0) eq(dailyShiftImbalanceSlacks, minimumDailyImbalance)
+    if (rules.weeklyRestBalanceWeight > 0) eq(weeklyRestSlacks, minimumWeeklyRestSpread)
+    if (rules.weekendRestFairnessWeight > 0) eq(weekendFairnessSlacks, minimumWeekendFairnessDeviation)
+  } else {
+    // A feasible incumbent is not proof that its slack values are minimal. Keep
+    // those variables free and let the final solve improve rule compliance.
+    const requestPreferenceSet = new Set(requestPreferenceObjectiveVars)
+    lp.objective.vars = lp.objective.vars.filter(item => !requestPreferenceSet.has(item))
+    lp.objective.vars.push(
+      ...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
+      ...splitFallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
+      ...dailyStaffingSlacks.map(item => ({ ...item, coef: 100_000_000 })),
+      ...splitTargetStaffingSlacks.map(item => ({ ...item, coef: 10_000_000 })),
+      ...ruleViolationSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
+      ...regularStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
+      ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: rules.openCloseBalanceWeight })),
+      ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 * rules.weeklyRestBalanceWeight / 100 })),
+      ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 * rules.weekendRestFairnessWeight / 100 })),
+    )
+    lp.objective.vars.push(...requestPreferenceVars)
+  }
+  if (staffingIsOptimal) lp.objective.vars.push(...ruleViolationSlacks)
   for (const item of dailyShiftImbalanceSlacks) if (rules.openCloseBalanceWeight > 0) lp.objective.vars.push({ ...item, coef: 20_000 * rules.openCloseBalanceWeight })
   for (const date of input.prioritizeRegularCoverageDates ?? []) {
     if (!dates.includes(date)) continue
@@ -519,10 +547,12 @@ export async function generateSchedule(input) {
   }
   lp.objective.vars.push(...preferredGapPenalties.map(item => ({ ...item, coef: 1_000_000 })))
   const optimizedSolution = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: finalTimeLimit, mipgap: mipGap })
-  const optimal = optimizedSolution.result.status === glpk.GLP_OPT
+  const optimal = staffingIsOptimal && optimizedSolution.result.status === glpk.GLP_OPT
   const hasFeasibleOptimization = [glpk.GLP_OPT, glpk.GLP_FEAS].includes(optimizedSolution.result.status)
   const solution = hasFeasibleOptimization ? optimizedSolution : staffingSolution
   const shifts = employees.flatMap(employee => dates.map(date => ({ employeeId: employee.id, date, code: codes.find(code => solution.result.vars[variable(employee.id, date, code).name] > 0.5) })))
+  const minimumDailyStaffingShortfall = Math.round(dailyStaffingSlacks.reduce((sum, item) => sum + (solution.result.vars[item.name] ?? 0), 0))
+  const minimumFallbackStaffingShortfall = Math.round(fallbackStaffingSlacks.reduce((sum, item) => sum + (solution.result.vars[item.name] ?? 0), 0))
   const validation = validateSchedule({ ...input, shifts })
   const regularCoverageGaps = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(issue.text))
   const dailyStaffingIssues = validation.issues.filter(issue => /^\d{4}-\d{2}-\d{2} 최소 근무인원 미충족/.test(issue.text))
