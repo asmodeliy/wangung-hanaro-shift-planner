@@ -479,10 +479,15 @@ export async function generateSchedule(input) {
       preferredGapPenalties.push({ name: worksDuringGap, coef: 1 })
     }
   }
-  const timeLimit = 12
+  // The manager's alternative picker runs three independent plans at once. Keep that
+  // interactive path responsive; explicit one-shot generation gets the longer budget.
+  const quickAlternativeSearch = input.alternativeSearch === true
+  const staffingTimeLimit = quickAlternativeSearch ? 4 : 12
+  const finalTimeLimit = quickAlternativeSearch ? 3 : 10
+  const mipGap = quickAlternativeSearch ? 0.02 : 0
   const ruleViolationNames = new Set(ruleViolationSlacks.map(item => item.name))
   const tieBreakVars = seededTieBreakVars.filter(item => !ruleViolationNames.has(item.name))
-  const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'staffing_floors_then_rule_violations', vars: [...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...splitFallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...dailyStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...splitTargetStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...ruleViolationSlacks.map(item => ({ ...item, coef: 10_000 })), ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: rules.openCloseBalanceWeight })), ...regularStaffingSlacks.map(item => ({ ...item, coef: 5_000 })), ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 * rules.weeklyRestBalanceWeight / 100 })), ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 * rules.weekendRestFairnessWeight / 100 })), ...preferredGapPenalties.map(item => ({ ...item, coef: 100 })), ...tieBreakVars] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: timeLimit, mipgap: 0 })
+  const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'staffing_floors_then_rule_violations', vars: [...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...splitFallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...dailyStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...splitTargetStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...ruleViolationSlacks.map(item => ({ ...item, coef: 10_000 })), ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: rules.openCloseBalanceWeight })), ...regularStaffingSlacks.map(item => ({ ...item, coef: 5_000 })), ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 * rules.weeklyRestBalanceWeight / 100 })), ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 * rules.weekendRestFairnessWeight / 100 })), ...preferredGapPenalties.map(item => ({ ...item, coef: 100 })), ...tieBreakVars] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: staffingTimeLimit, mipgap: mipGap })
   if (![glpk.GLP_OPT, glpk.GLP_FEAS].includes(staffingSolution.result.status)) {
     const shifts = fallbackAssignments({ month, employees, settings, holidays, existingShifts, adjacentShifts, lockedThroughDate, mode, seed: input.seed })
     const validation = validateSchedule({ ...input, shifts })
@@ -513,7 +518,7 @@ export async function generateSchedule(input) {
     for (const code of ['open', 'close']) lp.objective.vars.push({ name: `missing_regular_${date.replaceAll('-', '')}_${code}`, coef: 25_000_000 })
   }
   lp.objective.vars.push(...preferredGapPenalties.map(item => ({ ...item, coef: 1_000_000 })))
-  const optimizedSolution = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: 10, mipgap: 0 })
+  const optimizedSolution = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: finalTimeLimit, mipgap: mipGap })
   const optimal = optimizedSolution.result.status === glpk.GLP_OPT
   const hasFeasibleOptimization = [glpk.GLP_OPT, glpk.GLP_FEAS].includes(optimizedSolution.result.status)
   const solution = hasFeasibleOptimization ? optimizedSolution : staffingSolution
