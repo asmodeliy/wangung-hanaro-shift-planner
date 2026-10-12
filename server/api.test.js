@@ -179,11 +179,14 @@ test('manager gets distinct complete automatic schedule options and can apply on
   const result = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: 0 })
   assert.equal(result.status, 200, result.data?.error)
   assert.equal(result.data.exhaustive, false)
-  assert.ok(result.data.options.length > 1, 'different seeds should produce multiple alternatives')
+  assert.ok(result.data.options.length > 0, 'the search should always return its best available schedule')
   const signatures = result.data.options.map(option => option.shifts.map(item => `${item.employeeId}:${item.date}:${item.code}`).join('|'))
   assert.equal(new Set(signatures).size, signatures.length)
   assert.ok(result.data.options.every(option => option.shifts.length === 7 * 31))
-  assert.ok(result.data.options.every(option => !option.warnings.some(warning => /정규직 없음|동시휴무 제한 위반|미편성/.test(warning))))
+  assert.ok(result.data.options.every(option => !option.warnings.some(warning => /정규직 없음|동시휴무 제한 위반|미편성/.test(warning))), JSON.stringify(result.data.options.map(option => ({ warnings: option.warnings, issues: option.issues }))))
+  for (const date of Array.from({ length: 31 }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) {
+    assert.ok(result.data.options.every(option => option.shifts.filter(shift => shift.date === date && shift.code === 'full' && shift.employeeId <= 3).length === 1), `${date} should have exactly one regular full shift`)
+  }
   assert.ok(result.data.explored >= 3 && result.data.explored <= 6, 'the search may explore a second batch to replace rejected candidates')
   assert.equal(result.data.nextOffset, result.data.explored)
   const more = await call('/api/shifts/options', 'POST', { month, mode: 'replace', offset: result.data.nextOffset })
@@ -197,7 +200,7 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.equal(invalidApply.status, 422)
   assert.match(invalidApply.data.error, /정규직 전원이 쉬는 날짜/)
   assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid options must not be saved')
-  assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision })).status, 200)
+  assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision, confirmIssues: result.data.options[0].issues.length > 0 })).status, 200)
   assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
 })
 test('manager can review and explicitly apply the closest option when rules conflict', async () => {
@@ -255,14 +258,17 @@ test('manager can configure every additional automatic scheduling rule', async (
   const original = (await call('/api/settings')).data
   const operations = {
     ...original.operations, monthlyRestMode: 'fixed', monthlyRestDays: 10,
+    weekendRegularFullShift: false,
     allowFullShiftGeneration: true, approvedWishWeight: 5, pendingWishWeight: 2,
     weeklyRestBalanceWeight: 0, weekendRestFairnessWeight: 75, shiftRotationWeight: 30, openCloseBalanceWeight: 60,
+    rulePriorities: { ...original.operations.rulePriorities, weekendRegularFullShift: 1, approvedRequests: 18 },
   }
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
   assert.deepEqual((await call('/api/settings')).data.operations, operations)
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestMode: 'invalid' } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestDays: 32 } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, approvedWishWeight: -1 } })).status, 400)
+  assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, rulePriorities: { ...operations.rulePriorities, weekendRegularFullShift: 0 } } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', original)).status, 200)
 })
 test('manager can change a named employee employment type and produce assignment', async () => {

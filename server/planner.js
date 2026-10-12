@@ -2,6 +2,7 @@ import GLPK from 'glpk.js/node'
 
 export const codes = ['open', 'close', 'full', 'off']
 export const defaultRules = { allowedShifts: ['open', 'close'], offRules: [] }
+export const defaultRulePriorities = { consecutiveClose: 1, fullCloseAdjacent: 2, daysOffPairs: 3, minimumStaffing: 4, regularCoverage: 5, weekendRegularFullShift: 6, monthlyRest: 7, employeeRules: 8, produceOpening: 9, functionalMinimum: 10, supportRestLimit: 11, approvedRequests: 12, pendingRequests: 13, maxConsecutiveWork: 14, weeklyRestBalance: 15, weekendRestFairness: 16, shiftRotation: 17, openCloseBalance: 18, fullShiftGeneration: 19 }
 export const defaultOperationRules = {
   minimumEmployeesForGeneration: 3,
   monthlyRestMode: 'weekendHolidayCount', monthlyRestDays: 8,
@@ -10,12 +11,14 @@ export const defaultOperationRules = {
   weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 3,
   weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 2,
   functionalMinOnDuty: 2, supportMaxOff: 2, produceOpenCount: 0,
-  requireRegularEachShift: true, requireProduceOpener: true, noConsecutiveClose: true, noFullCloseAdjacent: true, maxConsecutiveWorkDays: 0,
+  requireRegularEachShift: true, weekendRegularFullShift: true, requireProduceOpener: true, noConsecutiveClose: true, noFullCloseAdjacent: true, maxConsecutiveWorkDays: 0,
   maxWishDaysPerEmployee: 0, supportMaxRequestsPerDate: 2, requestDueDay: 15, publishDay: 20,
   allowFullShiftGeneration: false, approvedWishWeight: 3, pendingWishWeight: 1,
   weeklyRestBalanceWeight: 100, weekendRestFairnessWeight: 100, shiftRotationWeight: 100, openCloseBalanceWeight: 100,
+  rulePriorities: defaultRulePriorities,
 }
-function operationRules(settings) { return { ...defaultOperationRules, ...settings?.operations } }
+function operationRules(settings) { return { ...defaultOperationRules, ...settings?.operations, rulePriorities: { ...defaultRulePriorities, ...settings?.operations?.rulePriorities } } }
+const priorityFactor = (rules, key) => 1 + (19 - Math.max(1, Math.min(19, Number(rules.rulePriorities?.[key]) || defaultRulePriorities[key]))) * 0.2
 // The close-rotation rules only apply to regular (일반직) staff.
 const closeRotationApplies = employee => employee.employmentType === '정규직'
 function shiftDay(date, offset) {
@@ -124,6 +127,10 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
       else if (count < staffingRule.target) warnings.push({ date, text: `${date} ${label} 목표 인원 미달 (${count}명 / 목표 ${staffingRule.target}명, 최소 기준 충족)` })
     }
     for (const code of ['open', 'close']) if (rules.requireRegularEachShift && !employees.some(e => e.employmentType === '정규직' && covers(entries.get(`${e.id}:${date}`), code))) issues.push({ date, text: `${date} ${code === 'open' ? '오픈' : '마감'} 정규직 없음` })
+    if (rules.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
+      const regularFullCount = employees.filter(employee => employee.employmentType === '정규직' && entries.get(`${employee.id}:${date}`) === 'full').length
+      if (regularFullCount !== 1) issues.push({ date, text: `${date} 주말 정규직 종일근무 ${regularFullCount}명 (필요 1명)` })
+    }
     for (const pair of settings.daysOffPairs ?? []) if (pair.employeeIds.every(id => employees.some(e => e.id === id)) && pair.employeeIds.every(id => entries.get(`${id}:${date}`) === 'off')) issues.push({ date, text: `${date} 동시휴무 제한 위반` })
     const functionalOn = functionalEmployees.filter(employee => works(entries.get(`${employee.id}:${date}`))).length
     const supportOff = supportEmployees.filter(employee => entries.get(`${employee.id}:${date}`) === 'off').length
@@ -218,9 +225,23 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
     const code = allowed.includes('open') ? 'open' : allowed.includes('close') ? 'close' : null
     if (code) cells.set(`${employee.id}:${date}`, code)
   }
+  if ((settings.daysOffPairs ?? []).length) for (const date of dates) for (const pair of settings.daysOffPairs) {
+    if (!pair.employeeIds.every(id => employees.some(employee => employee.id === id)) || !pair.employeeIds.every(id => cells.get(`${id}:${date}`) === 'off')) continue
+    const candidates = pair.employeeIds.map(id => employees.find(employee => employee.id === id)).filter(employee => employee && !fixed.has(`${employee.id}:${date}`))
+      .sort((a, b) => Number(isRequiredOff(a, date)) - Number(isRequiredOff(b, date)))
+    const employee = candidates[0]
+    if (!employee) continue
+    const allowed = employee.workRules?.allowedShifts ?? defaultRules.allowedShifts
+    const code = allowed.includes('open') ? 'open' : allowed.includes('close') ? 'close' : null
+    if (code) cells.set(`${employee.id}:${date}`, code)
+  }
   for (const date of dates) {
     const workers = employees.filter(employee => cells.get(`${employee.id}:${date}`) !== 'off')
     const hasShift = (employee, code) => cells.get(`${employee.id}:${date}`) === code || cells.get(`${employee.id}:${date}`) === 'full'
+    if (operations.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) && !workers.some(employee => employee.employmentType === '정규직' && cells.get(`${employee.id}:${date}`) === 'full')) {
+      const candidate = workers.find(employee => employee.employmentType === '정규직' && !fixed.has(`${employee.id}:${date}`) && ['open', 'close'].every(code => (employee.workRules?.allowedShifts ?? defaultRules.allowedShifts).includes(code)))
+      if (candidate) cells.set(`${candidate.id}:${date}`, 'full')
+    }
     for (const code of ['open', 'close']) if (operations.requireRegularEachShift && !employees.some(employee => employee.employmentType === '정규직' && hasShift(employee, code))) {
       const regular = workers.find(employee => employee.employmentType === '정규직' && (employee.workRules?.allowedShifts ?? defaultRules.allowedShifts).includes(code) && !fixed.has(`${employee.id}:${date}`) && (code !== 'close' || !closeBlocked(employee, date)))
       if (regular) cells.set(`${regular.id}:${date}`, code)
@@ -285,6 +306,7 @@ export async function generateSchedule(input) {
   const splitTargetStaffingSlacks = []
   const dailyShiftImbalanceSlacks = []
   const ruleViolationSlacks = []
+  const weekendFullShiftSlacks = []
   const weeklyRestSlacks = []
   const weekendFairnessSlacks = []
   const seededTieBreakVars = []
@@ -301,27 +323,38 @@ export async function generateSchedule(input) {
       const vars = codes.map(code => variable(employee.id, date, code))
       lp.binaries.push(...vars.map(v => v.name))
       eq(vars, 1)
-      for (const code of ['open', 'close']) if (!rules.allowedShifts.includes(code)) ruleViolationSlacks.push(variable(employee.id, date, code))
+      for (const code of ['open', 'close']) if (!rules.allowedShifts.includes(code)) ruleViolationSlacks.push({ ...variable(employee.id, date, code), priorityKey: 'employeeRules' })
       if (isRequiredOff(employee, date)) {
         const missed = `miss_required_off_${employee.id}_${date.replaceAll('-', '')}`
         lo([{ ...variable(employee.id, date, 'off'), coef: 1 }, { name: missed, coef: 1 }], 1)
-        ruleViolationSlacks.push({ name: missed, coef: 1 })
+        ruleViolationSlacks.push({ name: missed, coef: 1, priorityKey: 'employeeRules' })
       }
       const pinned = fixed.get(`${employee.id}:${date}`)
       if (pinned) eq([variable(employee.id, date, pinned)], 1)
-      else if (!operationRules(settings).allowFullShiftGeneration || !['open', 'close'].every(code => rules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
+      else {
+        const operations = operationRules(settings)
+        const weekendFullAllowed = operations.weekendRegularFullShift && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
+        if ((!operations.allowFullShiftGeneration && !weekendFullAllowed) || !['open', 'close'].every(code => rules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
+      }
       // Seeded tie-break keeps each alternative reproducible while exploring another valid arrangement.
       for (const code of codes) {
         const tieBreak = variable(employee.id, date, code, random() * 0.1)
         lp.objective.vars.push(tieBreak)
         seededTieBreakVars.push(tieBreak)
       }
+      if (operationRules(settings).allowFullShiftGeneration && ['open', 'close'].every(code => rules.allowedShifts.includes(code))) lp.objective.vars.push({ ...variable(employee.id, date, 'full'), coef: 25 * priorityFactor(operationRules(settings), 'fullShiftGeneration') })
     }
     const monthlyOver = `monthly_rest_over_${employee.id}`
     const monthlyUnder = `monthly_rest_under_${employee.id}`
-    lp.bounds.push({ name: monthlyOver, type: glpk.GLP_LO, lb: 0, ub: 0 }, { name: monthlyUnder, type: glpk.GLP_LO, lb: 0, ub: 0 })
+    const pinnedOffCount = dates.filter(date => fixed.get(`${employee.id}:${date}`) === 'off').length
+    const pinnedWorkCount = dates.filter(date => fixed.has(`${employee.id}:${date}`) && fixed.get(`${employee.id}:${date}`) !== 'off').length
+    const monthlyQuotaCanBeMet = pinnedOffCount <= target && dates.length - pinnedWorkCount >= target
+    lp.bounds.push(
+      { name: monthlyOver, type: monthlyQuotaCanBeMet ? glpk.GLP_FX : glpk.GLP_LO, lb: 0, ub: 0 },
+      { name: monthlyUnder, type: monthlyQuotaCanBeMet ? glpk.GLP_FX : glpk.GLP_LO, lb: 0, ub: 0 },
+    )
     eq([...dates.map(date => variable(employee.id, date, 'off')), { name: monthlyUnder, coef: 1 }, { name: monthlyOver, coef: -1 }], target)
-    ruleViolationSlacks.push({ name: monthlyOver, coef: 1 }, { name: monthlyUnder, coef: 1 })
+    ruleViolationSlacks.push({ name: monthlyOver, coef: 1, priorityKey: 'monthlyRest' }, { name: monthlyUnder, coef: 1, priorityKey: 'monthlyRest' })
     for (const week of weeks) {
       const inside = week.filter(date => dates.includes(date))
       const vars = inside.map(date => variable(employee.id, date, 'off'))
@@ -351,14 +384,14 @@ export async function generateSchedule(input) {
           const excess = `consecutive_excess_${employee.id}_${startIndex + limit + 1}`
           lp.bounds.push({ name: excess, type: glpk.GLP_LO, lb: 0, ub: 0 })
           up([...currentDates.flatMap(date => ['open', 'close', 'full'].map(code => variable(employee.id, date, code))), { name: excess, coef: -1 }], limit - priorWork)
-          ruleViolationSlacks.push({ name: excess, coef: 1 })
+          ruleViolationSlacks.push({ name: excess, coef: 1, priorityKey: 'maxConsecutiveWork' })
         }
       }
     }
     if (closeRotationApplies(employee)) {
       // `rules` is shadowed by this employee's work rules, so read the operation rules explicitly.
-      // These are hard constraints: a free cell can always avoid closing, so only two pinned cells can still conflict
-      // and validateSchedule reports that case.
+      // These enabled rotation rules remain hard constraints; the priority table
+      // scores rules that can safely be relaxed when staffing rules conflict.
       const operations = operationRules(settings)
       const pairs = []
       if (operations.noConsecutiveClose) pairs.push(['close', 'close'])
@@ -371,9 +404,40 @@ export async function generateSchedule(input) {
         const previousInMonth = dates.includes(previousDate)
         for (const [first, second] of pairs) {
           if (previousPinned && currentPinned) continue
-          if (previousPinned) { if (previousPinned === first) eq([variable(employee.id, date, second)], 0); continue }
-          if (currentPinned) { if (currentPinned === second && previousInMonth) eq([variable(employee.id, previousDate, first)], 0); continue }
-          if (previousInMonth) up([variable(employee.id, previousDate, first), variable(employee.id, date, second)], 1)
+          const priorityKey = first === 'close' ? 'consecutiveClose' : 'fullCloseAdjacent'
+          const strict = operations.rulePriorities[priorityKey] <= 3
+          if (previousPinned) {
+            if (previousPinned === first) {
+              if (strict) eq([variable(employee.id, date, second)], 0)
+              else {
+                const violation = `rotation_violation_${employee.id}_${date.replaceAll('-', '')}_${first}_${second}`
+                lp.bounds.push({ name: violation, type: glpk.GLP_LO, lb: 0, ub: 0 })
+                up([{ ...variable(employee.id, date, second), coef: 1 }, { name: violation, coef: -1 }], 0)
+                ruleViolationSlacks.push({ name: violation, coef: 1, priorityKey })
+              }
+            }
+            continue
+          } else if (currentPinned) {
+            if (currentPinned === second && previousInMonth) {
+              if (strict) eq([variable(employee.id, previousDate, first)], 0)
+              else {
+                const violation = `rotation_violation_${employee.id}_${date.replaceAll('-', '')}_${first}_${second}`
+                lp.bounds.push({ name: violation, type: glpk.GLP_LO, lb: 0, ub: 0 })
+                up([{ ...variable(employee.id, previousDate, first), coef: 1 }, { name: violation, coef: -1 }], 0)
+                ruleViolationSlacks.push({ name: violation, coef: 1, priorityKey })
+              }
+            }
+            continue
+          }
+          if (previousInMonth) {
+            if (strict) up([variable(employee.id, previousDate, first), variable(employee.id, date, second)], 1)
+            else {
+              const violation = `rotation_violation_${employee.id}_${date.replaceAll('-', '')}_${first}_${second}`
+              lp.bounds.push({ name: violation, type: glpk.GLP_LO, lb: 0, ub: 0 })
+              up([variable(employee.id, previousDate, first), variable(employee.id, date, second), { name: violation, coef: -1 }], 1)
+              ruleViolationSlacks.push({ name: violation, coef: 1, priorityKey })
+            }
+          }
         }
       }
     }
@@ -386,7 +450,8 @@ export async function generateSchedule(input) {
     lp.objective.vars.push({ name: deviation, coef: 1 })
   }
   for (const request of requests) {
-    const weight = request.status === 'approved' ? approvedWeight : pendingWeight
+    const approved = request.status === 'approved'
+    const weight = (approved ? approvedWeight : pendingWeight) * priorityFactor(rules, approved ? 'approvedRequests' : 'pendingRequests')
     const preference = variable(request.employeeId, request.date, 'off', -preferenceScale * weight)
     lp.objective.vars.push(preference)
     requestPreferenceObjectiveVars.push(preference)
@@ -397,14 +462,14 @@ export async function generateSchedule(input) {
     lp.bounds.push({ name: deviation, type: glpk.GLP_LO, lb: 0, ub: 0 })
     up([...expression, { name: deviation, coef: -1 }], target - constant)
     up([...expression.map(item => ({ ...item, coef: -item.coef })), { name: deviation, coef: -1 }], constant - target)
-    lp.objective.vars.push({ name: deviation, coef: weight })
+    lp.objective.vars.push({ name: deviation, coef: weight * priorityFactor(rules, 'weekendRestFairness') })
     weekendFairnessSlacks.push({ name: deviation, coef: 1 })
   }
   const priorShifts = adjacentShifts.filter(shift => shift.date.startsWith(`${previousMonth}-`))
   const priorHolidays = new Set(adjacentHolidays.filter(item => (typeof item === 'string' ? item : item.date).startsWith(`${previousMonth}-`)).map(item => typeof item === 'string' ? item : item.date))
   for (const shift of priorShifts) if ([0, 6].includes(new Date(`${shift.date}T00:00:00Z`).getUTCDay())) priorHolidays.add(shift.date)
   const currentHolidayDates = dates.filter(date => priorHolidays.has(date) || [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) || holidays.some(item => (typeof item === 'string' ? item : item.date) === date))
-  for (const employee of employees) if (rules.shiftRotationWeight > 0) lp.objective.vars.push({ name: `balance_${employee.id}`, coef: 50 * rules.shiftRotationWeight })
+  for (const employee of employees) if (rules.shiftRotationWeight > 0) lp.objective.vars.push({ name: `balance_${employee.id}`, coef: 50 * rules.shiftRotationWeight * priorityFactor(rules, 'shiftRotation') })
   const priorOffTotal = employees.reduce((sum, employee) => sum + priorShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off' && priorHolidays.has(shift.date)).length, 0)
   const expectedCurrentHolidayOff = employees.length * target * currentHolidayDates.length / dates.length
   const holidayOffTarget = (priorOffTotal + expectedCurrentHolidayOff) / employees.length
@@ -452,34 +517,48 @@ export async function generateSchedule(input) {
       // but a day with every regular off is avoidable and must never be emitted.
       lo(employees.filter(e => e.employmentType === '정규직').flatMap(e => ['open', 'close', 'full'].map(code => variable(e.id, date, code))), 1)
     }
+    if (rules.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
+      const missing = `missing_weekend_regular_full_${date.replaceAll('-', '')}`
+      lp.bounds.push({ name: missing, type: glpk.GLP_LO, lb: 0, ub: 0 })
+      const regularFullShifts = employees.filter(employee => employee.employmentType === '정규직').map(employee => variable(employee.id, date, 'full'))
+      lo([...regularFullShifts, { name: missing, coef: 1 }], 1)
+      up(regularFullShifts, 1)
+      weekendFullShiftSlacks.push({ name: missing, coef: 1 })
+    }
     if (rules.requireProduceOpener && (produceEmployees.length || produceBackups.length) && !(settings.produceOpenExceptions ?? []).includes(date)) {
+      const missing = `missing_produce_open_${dayKey}`
+      lp.bounds.push({ name: missing, type: glpk.GLP_LO, lb: 0, ub: 0 })
       const produceOpeners = produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')])
       const backupOpeners = produceBackups.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')])
-      lo([...produceOpeners, ...backupOpeners], 1)
+      lo([...produceOpeners, ...backupOpeners, { name: missing, coef: 1 }], 1)
+      ruleViolationSlacks.push({ name: missing, coef: 1, priorityKey: 'produceOpening' })
     }
     if (rules.functionalMinOnDuty > 0) {
       const shortage = `functional_short_${dayKey}`
       lp.bounds.push({ name: shortage, type: glpk.GLP_LO, lb: 0, ub: 0 })
       lo([...functionalEmployees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code))), { name: shortage, coef: 1 }], rules.functionalMinOnDuty)
-      ruleViolationSlacks.push({ name: shortage, coef: 1 })
+      ruleViolationSlacks.push({ name: shortage, coef: 1, priorityKey: 'functionalMinimum' })
     }
     if (supportEmployees.length > 0) {
       const excess = `support_off_excess_${dayKey}`
       lp.bounds.push({ name: excess, type: glpk.GLP_LO, lb: 0, ub: 0 })
       up([...supportEmployees.map(employee => variable(employee.id, date, 'off')), { name: excess, coef: -1 }], rules.supportMaxOff)
-      ruleViolationSlacks.push({ name: excess, coef: 1 })
+      ruleViolationSlacks.push({ name: excess, coef: 1, priorityKey: 'supportRestLimit' })
     }
     if (rules.produceOpenCount > 0 && !(settings.produceOpenExceptions ?? []).includes(date)) {
       const shortage = `produce_open_short_${dayKey}`
       lp.bounds.push({ name: shortage, type: glpk.GLP_LO, lb: 0, ub: 0 })
       lo([...produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')]), { name: shortage, coef: 1 }], rules.produceOpenCount)
-      ruleViolationSlacks.push({ name: shortage, coef: 1 })
+      ruleViolationSlacks.push({ name: shortage, coef: 1, priorityKey: 'produceOpening' })
     }
     for (const [pairIndex, pair] of (settings.daysOffPairs ?? []).entries()) if (pair.employeeIds.length === 2 && pair.employeeIds.every(id => employees.some(e => e.id === id))) {
-      const overlap = `paired_off_overlap_${pairIndex}_${dayKey}`
-      lp.bounds.push({ name: overlap, type: glpk.GLP_LO, lb: 0, ub: 0 })
-      up([...pair.employeeIds.map(id => variable(id, date, 'off')), { name: overlap, coef: -1 }], 1)
-      ruleViolationSlacks.push({ name: overlap, coef: 1 })
+      if (rules.rulePriorities.daysOffPairs <= 3) up(pair.employeeIds.map(id => variable(id, date, 'off')), 1)
+      else {
+        const overlap = `paired_off_overlap_${pairIndex}_${dayKey}`
+        lp.bounds.push({ name: overlap, type: glpk.GLP_LO, lb: 0, ub: 0 })
+        up([...pair.employeeIds.map(id => variable(id, date, 'off')), { name: overlap, coef: -1 }], 1)
+        ruleViolationSlacks.push({ name: overlap, coef: 1, priorityKey: 'daysOffPairs' })
+      }
     }
   }
   const gapPreference = input.preferEmployeeOffOnRegularGap
@@ -510,9 +589,28 @@ export async function generateSchedule(input) {
   const staffingTimeLimit = quickAlternativeSearch ? 4 : 12
   const finalTimeLimit = quickAlternativeSearch ? 3 : 10
   const mipGap = quickAlternativeSearch ? 0.02 : 0
+  const weightedRuleViolations = ruleViolationSlacks.map(({ priorityKey, ...item }) => ({ ...item, coef: 10_000 * priorityFactor(rules, priorityKey ?? 'employeeRules') }))
+  const priorityRanked = (items, ruleKey, baseWeight) => items.map(item => ({ ...item, coef: baseWeight * priorityFactor(rules, ruleKey) }))
+  const enforceTopPriority = (items, ruleKey) => {
+    if (rules.rulePriorities[ruleKey] > 3) return
+    for (const item of items) for (let i = lp.bounds.length - 1; i >= 0; i--) if (lp.bounds[i].name === item.name) {
+      lp.bounds[i] = { ...lp.bounds[i], type: glpk.GLP_FX, lb: 0, ub: 0 }
+      break
+    }
+  }
+  enforceTopPriority([...fallbackStaffingSlacks, ...splitFallbackStaffingSlacks, ...dailyStaffingSlacks, ...splitTargetStaffingSlacks], 'minimumStaffing')
+  enforceTopPriority(regularStaffingSlacks, 'regularCoverage')
+  enforceTopPriority(weekendFullShiftSlacks, 'weekendRegularFullShift')
+  for (const item of ruleViolationSlacks) if (rules.rulePriorities[item.priorityKey ?? 'employeeRules'] <= 3) enforceTopPriority([item], item.priorityKey ?? 'employeeRules')
+  const violationGroups = new Map()
+  for (const item of ruleViolationSlacks) {
+    const key = item.priorityKey ?? 'employeeRules'
+    if (!violationGroups.has(key)) violationGroups.set(key, [])
+    violationGroups.get(key).push({ name: item.name, coef: item.coef })
+  }
   const ruleViolationNames = new Set(ruleViolationSlacks.map(item => item.name))
   const tieBreakVars = seededTieBreakVars.filter(item => !ruleViolationNames.has(item.name))
-  const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'staffing_floors_then_rule_violations', vars: [...fallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...splitFallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })), ...dailyStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...splitTargetStaffingSlacks.map(item => ({ ...item, coef: 1_000 })), ...ruleViolationSlacks.map(item => ({ ...item, coef: 10_000 })), ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: rules.openCloseBalanceWeight })), ...regularStaffingSlacks.map(item => ({ ...item, coef: 5_000 })), ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 * rules.weeklyRestBalanceWeight / 100 })), ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 * rules.weekendRestFairnessWeight / 100 })), ...preferredGapPenalties.map(item => ({ ...item, coef: 100 })), ...tieBreakVars] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: staffingTimeLimit, mipgap: mipGap })
+  const staffingSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'staffing_floors_then_rule_violations', vars: [...priorityRanked(fallbackStaffingSlacks, 'minimumStaffing', 1_000_000_000), ...priorityRanked(splitFallbackStaffingSlacks, 'minimumStaffing', 1_000_000_000), ...priorityRanked(dailyStaffingSlacks, 'minimumStaffing', 1_000), ...priorityRanked(splitTargetStaffingSlacks, 'minimumStaffing', 1_000), ...weightedRuleViolations, ...priorityRanked(weekendFullShiftSlacks, 'weekendRegularFullShift', 10_000), ...priorityRanked(dailyShiftImbalanceSlacks, 'openCloseBalance', rules.openCloseBalanceWeight), ...priorityRanked(regularStaffingSlacks, 'regularCoverage', 5_000), ...priorityRanked(weeklyRestSlacks, 'weeklyRestBalance', 25 * rules.weeklyRestBalanceWeight / 100), ...priorityRanked(weekendFairnessSlacks, 'weekendRestFairness', 25 * rules.weekendRestFairnessWeight / 100), ...preferredGapPenalties.map(item => ({ ...item, coef: 100 })), ...tieBreakVars] } }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: staffingTimeLimit, mipgap: mipGap })
   if (![glpk.GLP_OPT, glpk.GLP_FEAS].includes(staffingSolution.result.status)) {
     const shifts = fallbackAssignments({ month, employees, settings, holidays, existingShifts, adjacentShifts, lockedThroughDate, mode, seed: input.seed })
     const validation = validateSchedule({ ...input, shifts })
@@ -525,7 +623,7 @@ export async function generateSchedule(input) {
     const minimumFallbackStaffingShortfall = Math.round(fallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
     const minimumSplitFallbackShortfall = Math.round(splitFallbackStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
     const minimumSplitTargetShortfall = Math.round(splitTargetStaffingSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
-    const minimumRuleViolations = Math.round(ruleViolationSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
+    const minimumWeekendFullShiftsMissed = Math.round(weekendFullShiftSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
     const minimumDailyImbalance = Math.round(dailyShiftImbalanceSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0))
     const minimumWeeklyRestSpread = weeklyRestSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
     const minimumWeekendFairnessDeviation = weekendFairnessSlacks.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)
@@ -534,7 +632,8 @@ export async function generateSchedule(input) {
     eq(splitTargetStaffingSlacks, minimumSplitTargetShortfall)
     eq(regularStaffingSlacks, minimumStaffingGaps)
     eq(dailyStaffingSlacks, minimumDailyStaffingShortfall)
-    eq(ruleViolationSlacks, minimumRuleViolations)
+    for (const group of violationGroups.values()) eq(group, Math.round(group.reduce((sum, item) => sum + (staffingSolution.result.vars[item.name] ?? 0), 0)))
+    eq(weekendFullShiftSlacks, minimumWeekendFullShiftsMissed)
     if (rules.openCloseBalanceWeight > 0) eq(dailyShiftImbalanceSlacks, minimumDailyImbalance)
     if (rules.weeklyRestBalanceWeight > 0) eq(weeklyRestSlacks, minimumWeeklyRestSpread)
     if (rules.weekendRestFairnessWeight > 0) eq(weekendFairnessSlacks, minimumWeekendFairnessDeviation)
@@ -548,16 +647,17 @@ export async function generateSchedule(input) {
       ...splitFallbackStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
       ...dailyStaffingSlacks.map(item => ({ ...item, coef: 100_000_000 })),
       ...splitTargetStaffingSlacks.map(item => ({ ...item, coef: 10_000_000 })),
-      ...ruleViolationSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
+      ...weightedRuleViolations,
+      ...priorityRanked(weekendFullShiftSlacks, 'weekendRegularFullShift', 1_000_000_000),
       ...regularStaffingSlacks.map(item => ({ ...item, coef: 1_000_000_000 })),
       ...dailyShiftImbalanceSlacks.map(item => ({ ...item, coef: rules.openCloseBalanceWeight })),
-      ...weeklyRestSlacks.map(item => ({ ...item, coef: 25 * rules.weeklyRestBalanceWeight / 100 })),
-      ...weekendFairnessSlacks.map(item => ({ ...item, coef: 25 * rules.weekendRestFairnessWeight / 100 })),
+      ...priorityRanked(weeklyRestSlacks, 'weeklyRestBalance', 25 * rules.weeklyRestBalanceWeight / 100),
+      ...priorityRanked(weekendFairnessSlacks, 'weekendRestFairness', 25 * rules.weekendRestFairnessWeight / 100),
     )
     lp.objective.vars.push(...requestPreferenceVars)
   }
   if (staffingIsOptimal) lp.objective.vars.push(...ruleViolationSlacks)
-  for (const item of dailyShiftImbalanceSlacks) if (rules.openCloseBalanceWeight > 0) lp.objective.vars.push({ ...item, coef: 20_000 * rules.openCloseBalanceWeight })
+  for (const item of dailyShiftImbalanceSlacks) if (rules.openCloseBalanceWeight > 0) lp.objective.vars.push({ ...item, coef: 20_000 * rules.openCloseBalanceWeight * priorityFactor(rules, 'openCloseBalance') })
   for (const date of input.prioritizeRegularCoverageDates ?? []) {
     if (!dates.includes(date)) continue
     for (const code of ['open', 'close']) lp.objective.vars.push({ name: `missing_regular_${date.replaceAll('-', '')}_${code}`, coef: 25_000_000 })

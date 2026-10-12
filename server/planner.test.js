@@ -13,7 +13,16 @@ function verify(input, result) {
 
 test('baseline covers both regular shifts, exact monthly quota and weekly minimum', async () => {
   const input = base()
-  verify(input, await generateSchedule(input))
+  const result = await generateSchedule(input)
+  verify(input, result)
+  for (const date of monthDates(input.month).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) assert.equal(result.shifts.filter(shift => shift.date === date && shift.code === 'full' && input.employees.some(employee => employee.id === shift.employeeId && employee.employmentType === '정규직')).length, 1)
+})
+test('turning off the weekend regular full-shift rule disables generated full shifts', async () => {
+  const input = base()
+  input.settings.operations.weekendRegularFullShift = false
+  const result = await generateSchedule(input)
+  verify(input, result)
+  assert.equal(result.shifts.filter(shift => shift.code === 'full').length, 0)
 })
 test('a full-day assignment covers both regular shifts and counts once as a worker', () => {
   const input = base()
@@ -252,7 +261,7 @@ test('generated full shifts follow the manager option and each employee shift pe
   assert.deepEqual(validateSchedule({ ...forcedFull, shifts: allowed.shifts }).issues, [])
 
   const input = base()
-  const disabledInput = { ...input, settings: { ...input.settings, operations: { ...input.settings.operations, allowFullShiftGeneration: false } } }
+  const disabledInput = { ...input, settings: { ...input.settings, operations: { ...input.settings.operations, allowFullShiftGeneration: false, weekendRegularFullShift: false } } }
   const disabled = await generateSchedule(disabledInput)
   verify(disabledInput, disabled)
   assert.equal(disabled.shifts.some(shift => shift.code === 'full'), false)
@@ -261,7 +270,7 @@ test('alternative search produces distinct valid schedules across seeds', async 
   const input = base()
   const results = []
   for (const seed of [7717, 112466, 217215]) {
-    const result = await generateSchedule({ ...input, seed })
+    const result = await generateSchedule({ ...input, seed, alternativeSearch: true })
     verify(input, result)
     results.push(result)
   }
