@@ -68,7 +68,7 @@ npm run app
 
 ## 검증
 
-`npm test`에는 자동편성·주간 휴무·정기휴무·확정 API 검증이 있습니다. API 테스트는 기존 임시 SQLite DB 구성을 전제로 하므로 Neon 단일 DB 전환에 맞춰 테스트 환경을 별도로 정리해야 합니다. `npm run build`와 `npm run lint`로 화면 빌드와 정적 검사를 실행합니다.
+`npm test`에는 자동편성 규칙과 관리자·직원 API 흐름 검증이 있습니다. API 테스트는 매번 비어 있는 테스트용 PostgreSQL DB가 필요하므로 `TEST_DATABASE_URL`에 격리된 DB 연결을 지정하세요. 값이 없으면 API 테스트는 운영 DB에 연결하지 않고 자동으로 건너뜁니다. `npm run build`와 `npm run lint`로 화면 빌드와 정적 검사를 실행합니다.
 
 ## 네트워크 참고
 

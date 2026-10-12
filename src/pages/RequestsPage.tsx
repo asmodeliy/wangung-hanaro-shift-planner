@@ -51,6 +51,7 @@ export function RequestsPage({ app }: { app: AppState }) {
             const existing = requests.some(item => item.date === date && item.status !== 'rejected' && (!isAdmin || item.employeeId === targetId))
             const selected = chosenDates.includes(date)
             return <button key={date} type="button" aria-pressed={selected} title={holidayMap.get(date) ?? ''}
+              disabled={existing} aria-label={`${index + 1}일${existing ? ', 이미 신청함' : ''}`}
               className={[selected && 'is-selected', existing && 'is-requested', holidayMap.has(date) && 'is-holiday'].filter(Boolean).join(' ')}
               onClick={() => toggleDate(date)}>{index + 1}</button>
           })}

@@ -43,7 +43,7 @@ test('full-day manual assignments are accepted and returned without losing the f
   const saved = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'full' })
   assert.equal(saved.status, 200)
   const rows = await call('/api/shifts?month=2026-10')
-  assert.ok(rows.data.some(row => row.employeeId === 1 && row.date === date && row.code === 'full'))
+  assert.ok(rows.data.some(row => row.employeeId === 1 && row.employeeName === '테스트 직원1' && row.employmentType === '정규직' && row.date === date && row.code === 'full'), JSON.stringify(rows.data))
 })
 test('past dates are frozen unless the manager explicitly allows them in settings', async () => {
   const date = '2026-01-07'
@@ -63,6 +63,7 @@ test('history restore brings back earlier shifts but never rewrites frozen past 
   const history = (await call(`/api/shifts/history?month=${month}`)).data
   const before = history.find(item => item.action.includes(date))
   assert.ok(before, 'edit should be recorded in history')
+  assert.ok(before.createdAt, 'history should expose its createdAt API field')
   const oldest = history.at(-1)
   assert.equal((await call(`/api/shifts/history/${oldest.id}/restore`, 'POST')).status, 200)
   const rows = (await call(`/api/shifts?month=${month}`)).data
@@ -88,6 +89,24 @@ test('holiday endpoint includes stored custom holidays', async () => {
   const response = await call('/api/holidays?year=2026')
   assert.equal(response.status, 200)
   assert.ok(response.data.some(holiday => holiday.date === '2026-12-31' && holiday.name === '추가 공휴일'))
+})
+test('employee can submit a request and resubmitting cannot revoke manager approval', async () => {
+  const date = '2026-12-18'
+  assert.equal((await call('/api/users/employee/1', 'PUT', { username: 'requeststaff', password: 'request-staff-test-pass' })).status, 200)
+  const adminCookie = cookie
+  const login = await call('/api/auth/login', 'POST', { username: 'requeststaff', password: 'request-staff-test-pass' }, false)
+  assert.equal(login.status, 200)
+  cookie = login.cookie
+  assert.equal((await call('/api/requests', 'POST', { dates: [date] })).status, 201)
+  const request = (await call('/api/requests?month=2026-12')).data[0]
+  assert.deepEqual({ employeeId: request.employeeId, employeeName: request.employeeName, date: request.date, status: request.status }, { employeeId: 1, employeeName: '테스트 직원1', date, status: 'pending' })
+
+  cookie = adminCookie
+  assert.equal((await call(`/api/requests/${request.id}`, 'PATCH', { status: 'approved' })).status, 200)
+  cookie = login.cookie
+  assert.equal((await call('/api/requests', 'POST', { dates: [date] })).status, 201)
+  cookie = adminCookie
+  assert.equal((await call('/api/requests?month=2026-12')).data[0].status, 'approved')
 })
 test('manual assignments below three workers are saved and reported as a validation issue', async () => {
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10)

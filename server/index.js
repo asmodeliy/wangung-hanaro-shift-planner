@@ -656,7 +656,7 @@ app.post('/api/requests', async (req, res) => {
       if (pendingDates.size + additional > maxPerMonth) return res.status(400).json({ error: `한 달 희망휴무는 최대 ${maxPerMonth}일까지 신청할 수 있습니다.` })
     }
   }
-  const insert = db.prepare("INSERT INTO requests (employee_id, request_date) VALUES (?, ?) ON CONFLICT(employee_id, request_date) DO UPDATE SET status = 'pending'")
+  const insert = db.prepare("INSERT INTO requests (employee_id, request_date) VALUES (?, ?) ON CONFLICT(employee_id, request_date) DO UPDATE SET status = 'pending' WHERE requests.status = 'rejected'")
   await runTransaction(async () => { for (const date of uniqueDates) await insert.run(employeeId, date) })
   res.status(201).json({ ok: true })
 })

@@ -15,12 +15,15 @@ const pool = new Pool({
 attachDatabasePool(pool)
 
 function postgresPlaceholders(sql) {
+  // PostgreSQL folds unquoted identifiers to lowercase, while the app's API
+  // contract uses camelCase aliases (for example `employeeId`). Preserve them.
+  const quotedAliases = sql.replace(/\bAS\s+([a-z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*)\b/g, 'AS "$1"')
   let index = 0
   let quoted = false
   let result = ''
-  for (let cursor = 0; cursor < sql.length; cursor++) {
-    const character = sql[cursor]
-    if (character === "'" && sql[cursor - 1] !== '\\') quoted = !quoted
+  for (let cursor = 0; cursor < quotedAliases.length; cursor++) {
+    const character = quotedAliases[cursor]
+    if (character === "'" && quotedAliases[cursor - 1] !== '\\') quoted = !quoted
     if (character === '?' && !quoted) result += `$${++index}`
     else result += character
   }

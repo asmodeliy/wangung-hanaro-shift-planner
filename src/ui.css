@@ -299,6 +299,7 @@ th.has-warning { box-shadow: inset 0 -3px 0 var(--yellow); }
 .datepick > span { font-size: 12px; font-weight: 700; color: var(--muted); padding: 4px 0; }
 .datepick button { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-weight: 600; }
 .datepick button:hover { border-color: var(--green); }
+.datepick button:disabled { cursor: not-allowed; opacity: 0.78; }
 .datepick .is-holiday { color: var(--red); }
 .datepick .is-requested { background: var(--yellow-soft); border-color: var(--yellow); }
 .datepick .is-selected { background: var(--green); border-color: var(--green); color: #fff; }
