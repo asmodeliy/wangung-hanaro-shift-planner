@@ -388,11 +388,6 @@ export async function generateSchedule(input) {
     )
     eq([...dates.map(date => variable(employee.id, date, 'off')), { name: monthlyUnder, coef: 1 }, { name: monthlyOver, coef: -1 }], target)
     ruleViolationSlacks.push({ name: monthlyOver, coef: 1, priorityKey: 'monthlyRest' }, { name: monthlyUnder, coef: 1, priorityKey: 'monthlyRest' })
-    if (employee.employmentType === '정규직' && operationRules(settings).weekendRegularFullShift) for (const week of weeks) {
-      const currentWeekDates = week.filter(date => dates.includes(date))
-      const priorAndFutureFullCount = adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'full' && week.includes(shift.date)).length
-      up(currentWeekDates.map(date => variable(employee.id, date, 'full')), Math.max(0, 1 - priorAndFutureFullCount))
-    }
     for (const week of weeks) {
       const inside = week.filter(date => dates.includes(date))
       const vars = inside.map(date => variable(employee.id, date, 'off'))
@@ -565,6 +560,8 @@ export async function generateSchedule(input) {
     }
     const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
     if (rules.weekendRegularFullShift && weekday === 6) {
+      // Full shifts are only possible on Saturday and Sunday, so this paired-day
+      // limit is also the one-full-shift-per-employee-per-week limit.
       const sundayKey = shiftDay(date, 1)
       if (dates.includes(sundayKey)) {
         for (const employee of employees.filter(employee => employee.employmentType === '정규직')) {
