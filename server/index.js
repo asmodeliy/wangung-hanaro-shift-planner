@@ -812,6 +812,7 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const bestEffortOptions = []
     const seen = new Set()
     const rejectedIssues = new Set()
+    let rejectedAllRegularOff = false
     const results = []
     // A time-limited solve can return a feasible incumbent that still breaks
     // operational rules. Replace rejected candidates with one more batch so
@@ -828,9 +829,16 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
         if (seen.has(signature)) continue
         seen.add(signature)
         const option = { id: 0, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal, issues: issues.map(issue => issue.text) }
+        const regularEmployees = input.employees.filter(employee => employee.employmentType === '정규직')
+        const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !result.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code !== 'off')))
+        if (hasAllRegularOffDay) {
+          rejectedAllRegularOff = true
+          for (const date of monthDates(month).filter(date => regularEmployees.length > 0 && regularEmployees.every(employee => !result.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code !== 'off')))) rejectedIssues.add(`${date} 정규직 전원 휴무`)
+          continue
+        }
         if (issues.length) {
           for (const issue of issues) rejectedIssues.add(issue.text)
-          bestEffortOptions.push(option)
+          if (offset === 0) bestEffortOptions.push(option)
           continue
         }
         if (options.length < 3) options.push({ ...option, id: options.length + 1 })
@@ -845,6 +853,7 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error
     if (!options.length && plannerError) return res.status(422).json({ error: plannerError })
     if (revision !== await currentDataRevision()) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
+    if (!options.length && rejectedAllRegularOff) return res.status(422).json({ error: '정규직 전원이 쉬는 날짜가 포함된 안은 제외했습니다. 고정 근무와 휴무 조건을 확인한 뒤 다시 탐색해 주세요.' })
     if (!options.length && rejectedIssues.size) return res.status(422).json({ error: `필수 운영 규칙을 충족하는 대안을 찾지 못했습니다. 후보에서 위반 ${rejectedIssues.size}건을 발견했습니다. 예: ${[...rejectedIssues].slice(0, 3).join(' · ')}. 인원·고정 근무·휴무 조건을 확인한 뒤 다시 탐색해 주세요.` })
     if (!options.length) return res.status(422).json({ error: '조건을 충족하는 대안을 찾지 못했습니다. 제약 기준과 기존 고정 배정을 확인해 주세요.' })
     res.json({ month, mode, targetRestDays: restTarget(monthDates(month), input.holidays, input.settings.operations), options, bestEffort, exhaustive: false, explored: offset + explored, nextOffset: offset + explored, revision })
@@ -866,6 +875,9 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'full', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
     if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
     const issues = validateSchedule({ ...input, shifts }).issues
+    const regularEmployees = input.employees.filter(employee => employee.employmentType === '정규직')
+    const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !shifts.some(shift => Number(shift.employeeId) === employee.id && shift.date === date && shift.code !== 'off')))
+    if (hasAllRegularOffDay) return res.status(422).json({ error: '정규직 전원이 쉬는 날짜가 포함된 편성안은 적용할 수 없습니다.' })
     if (issues.length && req.body?.confirmIssues !== true) return res.status(422).json({ error: `필수 운영 규칙 위반 ${issues.length}건이 있습니다. 확인 후 다시 적용해 주세요. ${[...new Set(issues.map(issue => issue.text))].slice(0, 3).join(' · ')}` })
     const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
     await runTransaction(async () => {

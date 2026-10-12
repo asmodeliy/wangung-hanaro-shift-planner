@@ -43,6 +43,13 @@ test('pending wishes cannot remove required regular coverage', async () => {
   verify(input, result)
   assert.equal(result.missedRequests.length, 2)
 })
+test('time-limited alternatives never overlap all regular employees on a day off', async () => {
+  const input = { ...base(), month: '2026-12', seed: 112446, alternativeSearch: true }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  const regulars = input.employees.filter(employee => employee.employmentType === '정규직')
+  for (const date of monthDates(input.month)) assert.ok(result.shifts.some(shift => shift.date === date && shift.code !== 'off' && regulars.some(employee => employee.id === shift.employeeId)), `${date} has all regular employees off`)
+})
 test('nine approved wishes cannot exceed an eight-day monthly rest quota', async () => {
   const input = { ...base(), requests: Array.from({ length: 9 }, (_, i) => ({ employeeId: 4, date: `2026-02-${String(i + 1).padStart(2, '0')}`, status: 'approved' })) }
   const result = await generateSchedule(input)
@@ -147,13 +154,16 @@ test('October staffing never drops below the relaxed threshold when three people
   const belowFallback = employees.map(employee => ({ employeeId: employee.id, date: fixedDay, code: employee.id === 1 ? 'open' : employee.id === 7 ? 'close' : 'off' }))
   assert.ok(validateSchedule({ ...input, shifts: belowFallback }).issues.some(issue => issue.text === `${fixedDay} 최소 근무인원 미충족 (2명 / 완화 기준 3명)`))
 })
-test('minimum staffing remains feasible when regular-only capacity is short', async () => {
+test('minimum staffing remains feasible while mandatory regular coverage is maintained', async () => {
   const input = { ...base(), month: '2026-10', holidays: ['2026-10-05', '2026-10-09'] }
   const result = await generateSchedule(input)
   assert.equal(result.error, undefined)
-  assert.ok(result.warnings.some(warning => /정규직 오픈·마감 배치가 .*회 부족/.test(warning)))
-  for (const date of monthDates(input.month)) assert.ok(result.shifts.filter(s => s.date === date && ['open', 'close'].includes(s.code)).length >= 3)
-  for (const employee of input.employees) assert.equal(result.shifts.filter(s => s.employeeId === employee.id && s.code === 'off').length, result.targetRestDays)
+  const regularIds = input.employees.filter(employee => employee.employmentType === '정규직').map(employee => employee.id)
+  for (const date of monthDates(input.month)) {
+    const day = result.shifts.filter(s => s.date === date)
+    assert.ok(day.filter(s => ['open', 'close'].includes(s.code)).length >= 3)
+    assert.ok(day.some(s => regularIds.includes(s.employeeId) && s.code !== 'off'), `${date} has all regular employees off`)
+  }
 })
 test('November default keeps the staffing floor and balances daily open and close teams', async () => {
   const input = { ...base(), month: '2026-11', holidays: ['2026-11-03'] }

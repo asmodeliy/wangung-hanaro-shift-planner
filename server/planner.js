@@ -208,6 +208,16 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
       count++
     }
   }
+  if (operations.requireRegularEachShift) for (const date of dates) {
+    const regulars = employees.filter(employee => employee.employmentType === '정규직')
+    if (!regulars.length || regulars.some(employee => cells.get(`${employee.id}:${date}`) !== 'off')) continue
+    const candidates = regulars.filter(employee => !fixed.has(`${employee.id}:${date}`)).sort((a, b) => Number(isRequiredOff(a, date)) - Number(isRequiredOff(b, date)))
+    const employee = candidates[0]
+    if (!employee) continue
+    const allowed = employee.workRules?.allowedShifts ?? defaultRules.allowedShifts
+    const code = allowed.includes('open') ? 'open' : allowed.includes('close') ? 'close' : null
+    if (code) cells.set(`${employee.id}:${date}`, code)
+  }
   for (const date of dates) {
     const workers = employees.filter(employee => cells.get(`${employee.id}:${date}`) !== 'off')
     const hasShift = (employee, code) => cells.get(`${employee.id}:${date}`) === code || cells.get(`${employee.id}:${date}`) === 'full'
@@ -433,7 +443,14 @@ export async function generateSchedule(input) {
       regularStaffingSlacks.push({ name: slack, coef: 1 })
       // Preserve both shifts, even if the monthly rest quota makes regular-only coverage impossible.
       lo(employees.flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), 1)
-      if (rules.requireRegularEachShift) lo([...employees.filter(e => e.employmentType === '정규직').flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), { name: slack, coef: 1 }], 1)
+      if (rules.requireRegularEachShift) {
+        lo(employees.filter(e => e.employmentType === '정규직').flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), 1)
+      }
+    }
+    if (rules.requireRegularEachShift) {
+      // A monthly quota can make regular coverage of both shifts impossible,
+      // but a day with every regular off is avoidable and must never be emitted.
+      lo(employees.filter(e => e.employmentType === '정규직').flatMap(e => ['open', 'close', 'full'].map(code => variable(e.id, date, code))), 1)
     }
     if (rules.requireProduceOpener && (produceEmployees.length || produceBackups.length) && !(settings.produceOpenExceptions ?? []).includes(date)) {
       const produceOpeners = produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')])

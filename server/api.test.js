@@ -195,25 +195,25 @@ test('manager gets distinct complete automatic schedule options and can apply on
   const allRegularOff = result.data.options[0].shifts.map(shift => shift.employeeId <= 3 && shift.date === `${month}-10` ? { ...shift, code: 'off' } : shift)
   const invalidApply = await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: allRegularOff, revision: result.data.revision })
   assert.equal(invalidApply.status, 422)
-  assert.match(invalidApply.data.error, /위반 .*건이 있습니다. 확인 후 다시 적용/)
+  assert.match(invalidApply.data.error, /정규직 전원이 쉬는 날짜/)
   assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid options must not be saved')
   assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision })).status, 200)
   assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
 })
 test('manager can review and explicitly apply the closest option when rules conflict', async () => {
   const originals = (await call('/api/employees')).data.filter(employee => employee.employmentType === '정규직')
+  const originalSettings = (await call('/api/settings')).data
   const beforeRows = (await call('/api/shifts?month=2026-12')).data
   assert.equal(originals.length, 3)
   try {
-    for (const employee of originals) {
-      const result = await call(`/api/employees/${employee.id}`, 'PUT', { ...employee, workRules: { ...employee.workRules, allowedShifts: ['open'] } })
-      assert.equal(result.status, 200)
-    }
+    const settingsResult = await call('/api/settings', 'PUT', { ...originalSettings, operations: { ...originalSettings.operations, supportMaxOff: 0 } })
+    assert.equal(settingsResult.status, 200)
     const options = await call('/api/shifts/options', 'POST', { month: '2026-12', mode: 'replace' })
     assert.equal(options.status, 200, options.data?.error)
     assert.equal(options.data.bestEffort, true)
     assert.ok(options.data.options.length > 0)
     assert.ok(options.data.options.every(option => option.issues.length > 0))
+    for (const date of Array.from({ length: 31 }, (_, index) => `2026-12-${String(index + 1).padStart(2, '0')}`)) assert.ok(options.data.options.every(option => originals.some(employee => option.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code !== 'off'))), `${date} must not give every regular employee the day off`)
     assert.equal(options.data.options[0].issues.length, Math.min(...options.data.options.map(option => option.issues.length)), 'the first option should have the fewest rule violations')
     assert.deepEqual((await call('/api/shifts?month=2026-12')).data, beforeRows, 'invalid options must not replace the current schedule')
     const unconfirmed = await call('/api/shifts/apply-option', 'POST', { month: '2026-12', mode: 'replace', shifts: options.data.options[0].shifts, revision: options.data.revision })
@@ -223,10 +223,16 @@ test('manager can review and explicitly apply the closest option when rules conf
     assert.equal(generation.status, 422)
     assert.match(generation.data.error, /필수 운영 규칙을 충족하지 못해/)
     assert.deepEqual((await call('/api/shifts?month=2026-12')).data, beforeRows, 'invalid direct generation must not replace the current schedule')
+    const allRegularOff = options.data.options[0].shifts.map(shift => shift.date === '2026-12-10' && shift.employeeId <= 3 ? { ...shift, code: 'off' } : shift)
+    const forcedViolation = await call('/api/shifts/apply-option', 'POST', { month: '2026-12', mode: 'replace', shifts: allRegularOff, revision: options.data.revision, confirmIssues: true })
+    assert.equal(forcedViolation.status, 422)
+    assert.match(forcedViolation.data.error, /정규직 전원이 쉬는 날짜/)
+    assert.deepEqual((await call('/api/shifts?month=2026-12')).data, beforeRows, 'even confirmed options cannot violate regular coverage')
     const applied = await call('/api/shifts/apply-option', 'POST', { month: '2026-12', mode: 'replace', shifts: options.data.options[0].shifts, revision: options.data.revision, confirmIssues: true })
     assert.equal(applied.status, 200)
     assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
   } finally {
+    assert.equal((await call('/api/settings', 'PUT', originalSettings)).status, 200)
     for (const employee of originals) {
       const result = await call(`/api/employees/${employee.id}`, 'PUT', employee)
       assert.equal(result.status, 200)
