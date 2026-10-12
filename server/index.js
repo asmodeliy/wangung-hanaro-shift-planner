@@ -811,21 +811,29 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     const options = []
     const seen = new Set()
     const rejectedIssues = new Set()
-    const results = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + (offset + attempt) * 104729 }, 55_000)))
-    const explored = results.length
-    for (const attempt of results) {
-      if (attempt.status !== 'fulfilled' || attempt.value.error) continue
-      const result = attempt.value
-      const issues = validateSchedule({ ...input, shifts: result.shifts }).issues
-      if (issues.length) {
-        for (const issue of issues) rejectedIssues.add(issue.text)
-        continue
+    const results = []
+    // A time-limited solve can return a feasible incumbent that still breaks
+    // operational rules. Replace rejected candidates with one more batch so
+    // the manager usually receives three valid alternatives in one search.
+    for (let batch = 0; batch < 2 && options.length < 3; batch += 1) {
+      const batchOffset = offset + results.length
+      const batchResults = await Promise.allSettled(Array.from({ length: 3 }, (_, attempt) => solveInWorker({ ...input, seed: 7717 + (batchOffset + attempt) * 104729 }, 55_000)))
+      results.push(...batchResults)
+      for (const attempt of batchResults) {
+        if (attempt.status !== 'fulfilled' || attempt.value.error) continue
+        const result = attempt.value
+        const issues = validateSchedule({ ...input, shifts: result.shifts }).issues
+        if (issues.length) {
+          for (const issue of issues) rejectedIssues.add(issue.text)
+          continue
+        }
+        const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
+        if (seen.has(signature)) continue
+        seen.add(signature)
+        if (options.length < 3) options.push({ id: options.length + 1, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal })
       }
-      const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
-      if (seen.has(signature)) continue
-      seen.add(signature)
-      options.push({ id: options.length + 1, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal })
     }
+    const explored = results.length
     const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error
     if (!options.length && plannerError) return res.status(422).json({ error: plannerError })
     if (revision !== await currentDataRevision()) return res.status(409).json({ error: '편성 중 직원·일정·조건이 변경되었습니다. 최신 정보로 다시 실행해 주세요.' })
