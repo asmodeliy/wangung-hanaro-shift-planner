@@ -39,11 +39,27 @@ test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
 })
 test('full-day manual assignments are accepted and returned without losing the full code', async () => {
-  const date = '2026-10-20'
+  const date = '2026-10-25'
   const saved = await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'full' })
   assert.equal(saved.status, 200)
   const rows = await call('/api/shifts?month=2026-10')
   assert.ok(rows.data.some(row => row.employeeId === 1 && row.employeeName === '테스트 직원1' && row.employmentType === '정규직' && row.date === date && row.code === 'full'), JSON.stringify(rows.data))
+})
+test('manual full shifts reject weekdays, contract staff and a second weekly shift', async () => {
+  const firstSunday = '2026-11-01'
+  const secondSunday = '2026-11-08'
+  const weekday = await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-11-02', code: 'full' })
+  assert.equal(weekday.status, 422)
+  assert.match(weekday.data.error, /주말 정규직만/)
+  const contract = await call('/api/shifts', 'PUT', { employeeId: 4, date: firstSunday, code: 'full' })
+  assert.equal(contract.status, 422)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: firstSunday, code: 'full' })).status, 200)
+  const repeated = await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-10-31', code: 'full' })
+  assert.equal(repeated.status, 422)
+  assert.match(repeated.data.error, /한 주에 종일근무를 한 번만/)
+  await call('/api/shifts', 'PUT', { employeeId: 1, date: firstSunday, code: '' })
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: secondSunday, code: 'full' })).status, 200, 'the weekly limit resets on Monday')
+  await call('/api/shifts', 'PUT', { employeeId: 1, date: secondSunday, code: '' })
 })
 test('past dates are frozen unless the manager explicitly allows them in settings', async () => {
   const date = '2026-01-07'
@@ -181,7 +197,7 @@ test('manager cannot manually assign the same regular employee full shifts on bo
     assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: saturday, code: 'full' })).status, 200)
     const repeated = await call('/api/shifts', 'PUT', { employeeId: 1, date: sunday, code: 'full' })
     assert.equal(repeated.status, 422)
-    assert.match(repeated.data.error, /토·일 연속 종일근무할 수 없습니다/)
+    assert.match(repeated.data.error, /한 주에 종일근무를 한 번만/)
   } finally {
     await call('/api/shifts', 'PUT', { employeeId: 1, date: saturday, code: '' })
     await call('/api/shifts', 'PUT', { employeeId: 1, date: sunday, code: '' })
@@ -199,6 +215,21 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.ok(result.data.options.every(option => !option.warnings.some(warning => /정규직 없음|동시휴무 제한 위반|미편성/.test(warning))), JSON.stringify(result.data.options.map(option => ({ warnings: option.warnings, issues: option.issues }))))
   for (const date of Array.from({ length: 31 }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))) {
     assert.ok(result.data.options.every(option => option.shifts.filter(shift => shift.date === date && shift.code === 'full' && shift.employeeId <= 3).length === 1), `${date} should have exactly one regular full shift`)
+  }
+  for (const option of result.data.options) {
+    for (const shift of option.shifts.filter(item => item.code === 'full')) {
+      assert.ok(shift.employeeId <= 3, `${shift.date} full shift must belong to a regular employee`)
+      assert.ok([0, 6].includes(new Date(`${shift.date}T00:00:00Z`).getUTCDay()), `${shift.date} cannot be a weekday full shift`)
+    }
+    for (const employeeId of [1, 2, 3]) for (const weekStart of new Set(option.shifts.map(shift => {
+      const date = new Date(`${shift.date}T00:00:00Z`)
+      date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7)
+      return date.toISOString().slice(0, 10)
+    }))) assert.ok(option.shifts.filter(shift => shift.employeeId === employeeId && shift.code === 'full' && (() => {
+      const date = new Date(`${shift.date}T00:00:00Z`)
+      date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7)
+      return date.toISOString().slice(0, 10) === weekStart
+    })()).length <= 1, `employee ${employeeId} has at most one full shift in ${weekStart}`)
   }
   for (const saturday of Array.from({ length: 31 }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`).filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 6)) {
     const sunday = new Date(`${saturday}T00:00:00Z`)
@@ -231,6 +262,11 @@ test('manager gets distinct complete automatic schedule options and can apply on
   assert.equal(invalidWeekendApply.status, 422)
   assert.match(invalidWeekendApply.data.error, /토·일 연속 종일근무/)
   assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'invalid weekend options must not be saved')
+  const weekdayFull = result.data.options[0].shifts.map(shift => shift.employeeId === 4 && shift.date === `${month}-01` ? { ...shift, code: 'full' } : shift)
+  const forbiddenApply = await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: weekdayFull, revision: result.data.revision, confirmIssues: true })
+  assert.equal(forbiddenApply.status, 422)
+  assert.match(forbiddenApply.data.error, /주말 정규직만/)
+  assert.equal((await call(`/api/shifts?month=${month}`)).data.length, 0, 'confirmed options cannot bypass weekday or contract full-shift limits')
   assert.equal((await call('/api/shifts/apply-option', 'POST', { month, mode: 'replace', shifts: result.data.options[0].shifts, revision: result.data.revision, confirmIssues: result.data.options[0].issues.length > 0 })).status, 200)
   assert.equal((await call('/api/shifts?month=2026-12')).data.length, 7 * 31)
 })
@@ -295,7 +331,7 @@ test('manager can configure every additional automatic scheduling rule', async (
     rulePriorities: { ...original.operations.rulePriorities, weekendRegularFullShift: 1, approvedRequests: 18 },
   }
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations })).status, 200)
-  assert.deepEqual((await call('/api/settings')).data.operations, operations)
+  assert.deepEqual((await call('/api/settings')).data.operations, { ...operations, allowFullShiftGeneration: false })
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestMode: 'invalid' } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, monthlyRestDays: 32 } })).status, 400)
   assert.equal((await call('/api/settings', 'PUT', { ...original, operations: { ...operations, approvedWishWeight: -1 } })).status, 400)

@@ -174,7 +174,7 @@ export function WeekCards({ app }: { app: AppState }) {
           const hours = shiftHours(employee, shift, settings, isAdmin)
           const frozen = isLockedDate(slot.date, settings) || Boolean(shift?.locked)
           return <li key={employee.id}>
-            <button type="button" className={`day-row ${own ? 'is-own' : ''}`} disabled={!isAdmin || frozen} onClick={() => void saveShift(employee.id, slot.day, cycleShift(shift))}>
+            <button type="button" className={`day-row ${own ? 'is-own' : ''}`} disabled={!isAdmin || frozen} onClick={() => void saveShift(employee.id, slot.day, cycleShift(employee, slot.date, shift))}>
               <span className={`avatar tone-${index % 5}`} aria-hidden="true">{employee.name.slice(-1)}</span>
               <span className="day-row-name">{employee.name}{own && <em>나</em>}{request && <i className="chip-dot" title="희망휴무"/>}</span>
               <span className={`tag ${shift ? `tag-${shift.code}` : 'tag-empty'}`}>{shift ? shiftText[shift.code] : '미정'}{hours && <small>{hours.start}–{hours.end}</small>}</span>

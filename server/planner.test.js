@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { defaultRules, fallbackMinimumWorkersForDate, generateSchedule, isRequiredOff, minimumWorkersForDate, monthDates, normalizeRules, restTarget, validDate, validateSchedule } from './planner.js'
+import { defaultRules, fallbackMinimumWorkersForDate, generateSchedule, isRequiredOff, minimumWorkersForDate, monthDates, normalizeRules, restTarget, validDate, validateSchedule, weekDates } from './planner.js'
 
 const employees = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `직원${i + 1}`, employmentType: i < 3 ? '정규직' : '계약직', workRules: structuredClone(defaultRules) }))
 const base = () => ({ month: '2026-02', employees: structuredClone(employees), settings: { daysOffPairs: [{ employeeIds: [2, 7] }], operations: { weekdayTarget: 3, weekendTarget: 3, weekdayMinimum: 3, weekendMinimum: 3 } }, holidays: [] })
@@ -261,7 +261,7 @@ test('monthly rest can follow the calendar or a manager-selected fixed amount', 
   assert.equal(restTarget(dates, [], { monthlyRestMode: 'fixed', monthlyRestDays: 10 }), 10)
   assert.equal(restTarget(dates, ['2026-02-02'], { monthlyRestMode: 'weekendHolidayCount' }), 9)
 })
-test('generated full shifts follow the manager option and each employee shift permissions', async () => {
+test('generated full shifts are limited to weekend regular employees once per week', async () => {
   const onlyEmployee = { ...structuredClone(employees[0]), dutyType: 'other' }
   const forcedFull = {
     month: '2026-02', employees: [onlyEmployee], holidays: [],
@@ -269,19 +269,38 @@ test('generated full shifts follow the manager option and each employee shift pe
       minimumEmployeesForGeneration: 1, monthlyRestMode: 'fixed', monthlyRestDays: 0,
       weekdayTarget: 1, weekendTarget: 1, weekdayMinimum: 1, weekendMinimum: 1,
       functionalMinOnDuty: 0, supportMaxOff: 0, requireProduceOpener: false,
-      allowFullShiftGeneration: true, openCloseBalanceWeight: 0,
+      allowFullShiftGeneration: true, weekendRegularFullShift: true, openCloseBalanceWeight: 0,
     } },
   }
-  const allowed = await generateSchedule(forcedFull)
-  assert.equal(allowed.error, undefined)
-  assert.ok(allowed.shifts.every(shift => shift.code === 'full'), 'full shifts must satisfy both shifts when no separate staff can cover them')
-  assert.deepEqual(validateSchedule({ ...forcedFull, shifts: allowed.shifts }).issues, [])
+  const result = await generateSchedule(base())
+  verify(base(), result)
+  const regularIds = new Set(employees.filter(employee => employee.employmentType === '정규직').map(employee => employee.id))
+  for (const shift of result.shifts.filter(item => item.code === 'full')) {
+    assert.ok(regularIds.has(shift.employeeId), 'contract employees cannot work full shifts')
+    assert.ok([0, 6].includes(new Date(`${shift.date}T00:00:00Z`).getUTCDay()), 'full shifts cannot be assigned on weekdays')
+  }
+  for (const employee of employees.filter(item => item.employmentType === '정규직')) for (const week of new Set(monthDates('2026-02').map(date => weekDates(date)[0]))) {
+    assert.ok(result.shifts.filter(item => item.employeeId === employee.id && item.code === 'full' && weekDates(item.date)[0] === week).length <= 1, `${employee.name} may work at most one full shift during ${week}`)
+  }
+  assert.ok(validateSchedule({ ...forcedFull, shifts: [{ employeeId: onlyEmployee.id, date: '2026-02-02', code: 'full' }] }).issues.some(issue => issue.text.includes('종일근무는 주말 정규직만')))
 
   const input = base()
   const disabledInput = { ...input, settings: { ...input.settings, operations: { ...input.settings.operations, allowFullShiftGeneration: false, weekendRegularFullShift: false } } }
   const disabled = await generateSchedule(disabledInput)
   verify(disabledInput, disabled)
   assert.equal(disabled.shifts.some(shift => shift.code === 'full'), false)
+})
+
+test('validator rejects weekday, contract and repeated weekly full shifts', () => {
+  const input = { ...base(), month: '2026-02' }
+  const shifts = monthDates(input.month).flatMap(date => input.employees.map(employee => ({
+    employeeId: employee.id, date,
+    code: employee.id === 1 && ['2026-02-02', '2026-02-07'].includes(date) ? 'full' : employee.id === 4 && date === '2026-02-08' ? 'full' : 'off',
+  })))
+  const issues = validateSchedule({ ...input, shifts }).issues.map(issue => issue.text)
+  assert.ok(issues.some(text => text.includes('2026-02-02 종일근무는 주말 정규직만')))
+  assert.ok(issues.some(text => text.includes('2026-02-08 종일근무는 주말 정규직만')))
+  assert.ok(issues.some(text => text.includes('2026-02-02 주간 종일근무')))
 })
 test('alternative search produces distinct valid schedules across seeds', async () => {
   const input = base()

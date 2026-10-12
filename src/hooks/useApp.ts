@@ -190,7 +190,25 @@ export function useApp() {
     }
     catch (e) { setShifts(previous); setError(e instanceof Error ? e.message : '저장하지 못했습니다.') }
   }
-  const cycleShift = (shift?: Shift): ShiftCode | '' => shift?.code === 'open' ? 'close' : shift?.code === 'close' ? 'full' : shift?.code === 'full' ? 'off' : shift?.code === 'off' ? '' : 'open'
+  const cycleShift = (employee: Employee, date: string, shift?: Shift): ShiftCode | '' => {
+    if (shift?.code === 'open') return 'close'
+    if (shift?.code === 'close') {
+      const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
+      const weekStart = new Date(`${date}T00:00:00Z`)
+      weekStart.setUTCDate(weekStart.getUTCDate() - (weekday + 6) % 7)
+      const weekStartKey = weekStart.toISOString().slice(0, 10)
+      const canAssignFull = employee.employmentType === '정규직' && settings.operations.weekendRegularFullShift && [0, 6].includes(weekday)
+        && !shifts.some(item => item.code === 'full' && ((item.employeeId === employee.id && item.date !== date && (() => {
+          const assignedWeek = new Date(`${item.date}T00:00:00Z`)
+          assignedWeek.setUTCDate(assignedWeek.getUTCDate() - (assignedWeek.getUTCDay() + 6) % 7)
+          return assignedWeek.toISOString().slice(0, 10) === weekStartKey
+        })()) || (item.date === date && item.employeeId !== employee.id)))
+      return canAssignFull ? 'full' : 'off'
+    }
+    if (shift?.code === 'full') return 'off'
+    if (shift?.code === 'off') return ''
+    return 'open'
+  }
   const saveEmployee = async (data: Omit<Employee, 'id'>, id?: number) => {
     try {
       await api(id ? `/api/employees/${id}` : '/api/employees', { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) })

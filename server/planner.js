@@ -131,6 +131,13 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
       const regularFullCount = employees.filter(employee => employee.employmentType === '정규직' && entries.get(`${employee.id}:${date}`) === 'full').length
       if (regularFullCount !== 1) issues.push({ date, text: `${date} 주말 정규직 종일근무 ${regularFullCount}명 (필요 1명)` })
     }
+    for (const shift of shifts.filter(item => item.date === date && item.code === 'full')) {
+      const employee = employees.find(item => item.id === shift.employeeId)
+      const isWeekend = [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
+      if (!rules.weekendRegularFullShift || !isWeekend || employee?.employmentType !== '정규직') {
+        issues.push({ employeeId: shift.employeeId, date, text: `${employee?.name ?? `직원 ${shift.employeeId}`}: ${date} 종일근무는 주말 정규직만 가능합니다.` })
+      }
+    }
     const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
     if (rules.weekendRegularFullShift && (weekday === 6 || (weekday === 0 && !dates.includes(shiftDay(date, -1))))) {
       const saturdayKey = weekday === 6 ? date : shiftDay(date, -1)
@@ -150,6 +157,17 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     if (rules.functionalMinOnDuty > 0 && functionalEmployees.length >= rules.functionalMinOnDuty && functionalOn < rules.functionalMinOnDuty) issues.push({ date, text: `${date} 일반직 출근 부족 (${functionalOn}명 / 필요 ${rules.functionalMinOnDuty}명, 재직 일반직 ${functionalEmployees.length}명)` })
     if (supportEmployees.length > 0 && supportOff > rules.supportMaxOff) issues.push({ date, text: `${date} 계약직 휴무 초과 (${supportOff}명 / 최대 ${rules.supportMaxOff}명)` })
     if (rules.produceOpenCount > 0 && !(settings.produceOpenExceptions ?? []).includes(date) && produceEmployees.length >= rules.produceOpenCount && produceOpen < rules.produceOpenCount) issues.push({ date, text: `${date} 농산 담당 오픈조 부족 (${produceOpen}명 / 필요 ${rules.produceOpenCount}명, 재직 담당 ${produceEmployees.length}명)` })
+  }
+  if (rules.weekendRegularFullShift) for (const employee of employees.filter(item => item.employmentType === '정규직')) {
+    const fullByWeek = new Map()
+    for (const shift of [...adjacentShifts, ...shifts].filter(item => item.employeeId === employee.id && item.code === 'full')) {
+      const weekStart = weekDates(shift.date)[0]
+      if (!fullByWeek.has(weekStart)) fullByWeek.set(weekStart, [])
+      fullByWeek.get(weekStart).push(shift.date)
+    }
+    for (const [weekStart, fullDates] of fullByWeek) if (fullDates.length > 1 && fullDates.some(date => dates.includes(date))) {
+      issues.push({ employeeId: employee.id, date: fullDates.at(-1), text: `${employee.name}: ${weekStart} 주간 종일근무 ${fullDates.length}회 (최대 1회)` })
+    }
   }
   for (const employee of employees) {
     const rule = employee.workRules ?? defaultRules
@@ -249,7 +267,9 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
     const workers = employees.filter(employee => cells.get(`${employee.id}:${date}`) !== 'off')
     const hasShift = (employee, code) => cells.get(`${employee.id}:${date}`) === code || cells.get(`${employee.id}:${date}`) === 'full'
     if (operations.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) && !workers.some(employee => employee.employmentType === '정규직' && cells.get(`${employee.id}:${date}`) === 'full')) {
-      const candidates = workers.filter(employee => employee.employmentType === '정규직' && !fixed.has(`${employee.id}:${date}`) && ['open', 'close'].every(code => (employee.workRules?.allowedShifts ?? defaultRules.allowedShifts).includes(code)) && codeBefore(employee, date) !== 'full')
+      const week = weekDates(date)
+      const weekFullCount = employee => adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'full' && week.includes(shift.date)).length + week.filter(day => cells.get(`${employee.id}:${day}`) === 'full').length
+      const candidates = workers.filter(employee => employee.employmentType === '정규직' && !fixed.has(`${employee.id}:${date}`) && ['open', 'close'].every(code => (employee.workRules?.allowedShifts ?? defaultRules.allowedShifts).includes(code)) && codeBefore(employee, date) !== 'full' && weekFullCount(employee) < 1)
       const weekendFullCount = employee => dates.filter(day => [0, 6].includes(new Date(`${day}T00:00:00Z`).getUTCDay()) && cells.get(`${employee.id}:${day}`) === 'full').length
       const tieBreak = new Map(candidates.map(employee => [employee.id, random()]))
       candidates.sort((a, b) => weekendFullCount(a) - weekendFullCount(b) || tieBreak.get(a.id) - tieBreak.get(b.id))
@@ -348,7 +368,7 @@ export async function generateSchedule(input) {
       else {
         const operations = operationRules(settings)
         const weekendFullAllowed = operations.weekendRegularFullShift && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
-        if ((!operations.allowFullShiftGeneration && !weekendFullAllowed) || !['open', 'close'].every(code => rules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
+        if (!weekendFullAllowed || !['open', 'close'].every(code => rules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
       }
       // Seeded tie-break keeps each alternative reproducible while exploring another valid arrangement.
       for (const code of codes) {
@@ -356,7 +376,6 @@ export async function generateSchedule(input) {
         lp.objective.vars.push(tieBreak)
         seededTieBreakVars.push(tieBreak)
       }
-      if (operationRules(settings).allowFullShiftGeneration && ['open', 'close'].every(code => rules.allowedShifts.includes(code))) lp.objective.vars.push({ ...variable(employee.id, date, 'full'), coef: 25 * priorityFactor(operationRules(settings), 'fullShiftGeneration') })
     }
     const monthlyOver = `monthly_rest_over_${employee.id}`
     const monthlyUnder = `monthly_rest_under_${employee.id}`
@@ -369,6 +388,11 @@ export async function generateSchedule(input) {
     )
     eq([...dates.map(date => variable(employee.id, date, 'off')), { name: monthlyUnder, coef: 1 }, { name: monthlyOver, coef: -1 }], target)
     ruleViolationSlacks.push({ name: monthlyOver, coef: 1, priorityKey: 'monthlyRest' }, { name: monthlyUnder, coef: 1, priorityKey: 'monthlyRest' })
+    if (employee.employmentType === '정규직' && operationRules(settings).weekendRegularFullShift) for (const week of weeks) {
+      const currentWeekDates = week.filter(date => dates.includes(date))
+      const priorAndFutureFullCount = adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'full' && week.includes(shift.date)).length
+      up(currentWeekDates.map(date => variable(employee.id, date, 'full')), Math.max(0, 1 - priorAndFutureFullCount))
+    }
     for (const week of weeks) {
       const inside = week.filter(date => dates.includes(date))
       const vars = inside.map(date => variable(employee.id, date, 'off'))

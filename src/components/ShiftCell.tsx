@@ -27,7 +27,7 @@ export function ShiftCell({ app, employee, date, day, showHours = false, compact
       disabled={!isAdmin || frozen}
       title={title}
       aria-label={`${employee.name} ${date} ${label}`}
-      onClick={() => void saveShift(employee.id, day, cycleShift(shift))}
+      onClick={() => void saveShift(employee.id, day, cycleShift(employee, date, shift))}
     >
       <span className="chip-label">{shift ? (compact ? shiftShort[shift.code] : shiftText[shift.code]) : '·'}</span>
       {showHours && hours && <small className="chip-hours">{hours.start}–{hours.end}</small>}

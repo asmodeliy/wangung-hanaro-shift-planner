@@ -64,7 +64,7 @@ async function readSettings() {
       close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
       produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
     },
-    operations: { ...defaultOperationRules, ...stored.operations, rulePriorities: { ...defaultRulePriorities, ...stored.operations?.rulePriorities } },
+    operations: { ...defaultOperationRules, ...stored.operations, allowFullShiftGeneration: false, rulePriorities: { ...defaultRulePriorities, ...stored.operations?.rulePriorities } },
   }
   delete settings.operations.avoidUnneededProduceBackup
   settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
@@ -451,6 +451,7 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   }
   if (incoming.operations !== undefined) {
     const operations = { ...settings.operations, ...incoming.operations }
+    operations.allowFullShiftGeneration = false
     operations.rulePriorities = { ...defaultRulePriorities, ...settings.operations.rulePriorities, ...incoming.operations.rulePriorities }
     const ranges = {
       minimumEmployeesForGeneration: [0, 100],
@@ -467,7 +468,7 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     if (!operations.rulePriorities || typeof operations.rulePriorities !== 'object' || Array.isArray(operations.rulePriorities) || Object.keys(operations.rulePriorities).some(key => !(key in defaultRulePriorities)) || Object.keys(defaultRulePriorities).some(key => !Number.isInteger(operations.rulePriorities[key]) || operations.rulePriorities[key] < 1 || operations.rulePriorities[key] > 19)) return res.status(400).json({ error: '자동 편성 우선순위는 1~19 사이 정수로 설정해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
     for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: operations.allowFullShiftGeneration, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: false, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()
@@ -612,11 +613,12 @@ app.put('/api/shifts', requireAdmin, async (req, res) => {
   if (!employeeRecord) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
   const settings = await readSettings()
-  if (code === 'full' && employeeRecord.employmentType === '정규직' && settings.operations.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
-    const pairedDate = new Date(`${date}T00:00:00Z`)
-    pairedDate.setUTCDate(pairedDate.getUTCDate() + (pairedDate.getUTCDay() === 6 ? 1 : -1))
-    const pairedKey = pairedDate.toISOString().slice(0, 10)
-    if ((await db.prepare("SELECT 1 FROM shifts WHERE employee_id = ? AND shift_date = ? AND code = 'full'").get(employee, pairedKey))) return res.status(422).json({ error: `${employeeRecord.employmentType} 직원은 토·일 연속 종일근무할 수 없습니다. 주말 종일 담당자를 다르게 배정해 주세요.` })
+  if (code === 'full') {
+    const isWeekend = [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
+    if (employeeRecord.employmentType !== '정규직' || !settings.operations.weekendRegularFullShift || !isWeekend) return res.status(422).json({ error: '종일근무는 주말 정규직만 배정할 수 있습니다.' })
+    const [weekStart, , , , , , weekEnd] = weekDates(date)
+    if (await db.prepare("SELECT 1 FROM shifts WHERE employee_id = ? AND code = 'full' AND shift_date >= ? AND shift_date <= ? AND shift_date != ?").get(employee, weekStart, weekEnd, date)) return res.status(422).json({ error: '정규직 한 명은 한 주에 종일근무를 한 번만 할 수 있습니다.' })
+    if (await db.prepare("SELECT 1 FROM shifts WHERE shift_date = ? AND code = 'full' AND employee_id != ?").get(date, employee)) return res.status(422).json({ error: '주말 하루에는 정규직 한 명만 종일근무할 수 있습니다.' })
   }
   if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
   const previous = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employee, date)
@@ -851,6 +853,11 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
           for (const issue of issues.filter(issue => issue.text.includes('주말 연속 종일근무'))) rejectedIssues.add(issue.text)
           continue
         }
+        const hasForbiddenFullShift = issues.some(issue => issue.text.includes('종일근무는 주말 정규직만 가능') || issue.text.includes('주간 종일근무'))
+        if (hasForbiddenFullShift) {
+          for (const issue of issues.filter(issue => issue.text.includes('종일근무는 주말 정규직만 가능') || issue.text.includes('주간 종일근무'))) rejectedIssues.add(issue.text)
+          continue
+        }
         if (issues.length) {
           for (const issue of issues) rejectedIssues.add(issue.text)
           bestEffortOptions.push(option)
@@ -894,6 +901,7 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !shifts.some(shift => Number(shift.employeeId) === employee.id && shift.date === date && shift.code !== 'off')))
     if (hasAllRegularOffDay) return res.status(422).json({ error: '정규직 전원이 쉬는 날짜가 포함된 편성안은 적용할 수 없습니다.' })
     if (input.settings.operations.weekendRegularFullShift && issues.some(issue => issue.text.includes('주말 연속 종일근무'))) return res.status(422).json({ error: '같은 정규직의 토·일 연속 종일근무가 포함된 편성안은 적용할 수 없습니다.' })
+    if (issues.some(issue => issue.text.includes('종일근무는 주말 정규직만 가능') || issue.text.includes('주간 종일근무'))) return res.status(422).json({ error: '종일근무는 주말 정규직만, 한 주에 한 번만 배정할 수 있습니다.' })
     if (issues.length && req.body?.confirmIssues !== true) return res.status(422).json({ error: `필수 운영 규칙 위반 ${issues.length}건이 있습니다. 확인 후 다시 적용해 주세요. ${[...new Set(issues.map(issue => issue.text))].slice(0, 3).join(' · ')}` })
     const existingCells = new Set(input.existingShifts.map(entry => `${entry.employeeId}:${entry.date}`))
     await runTransaction(async () => {

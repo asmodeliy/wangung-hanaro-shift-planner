@@ -76,7 +76,7 @@ export function SchedulePage({ app }: { app: AppState }) {
         {isAdmin && <span className={`pill ${confirmed ? 'pill-ok' : 'pill-draft'}`}>{confirmed ? '확정된 근무표' : '작성 중'}</span>}
         {isAdmin && hasLockedShifts && <span className="pill">◆ 고정 {lockedShiftCount}칸</span>}
         {isAdmin && <span className={`pill ${noticeCount ? 'pill-warn' : ''}`}>확인 항목 <b>{noticeCount}건</b></span>}
-        <span className="pill-note">{isAdmin ? '칸을 누르면 오픈 → 마감 → 종일 → 휴무 → 비움 순서로 바뀝니다.' : '본인 일정은 이름 옆에 “나”로 표시됩니다.'}</span>
+        <span className="pill-note">{isAdmin ? '칸을 누르면 근무가 바뀝니다. 종일은 주말 정규직만, 한 주에 한 번 배정할 수 있습니다.' : '본인 일정은 이름 옆에 “나”로 표시됩니다.'}</span>
       </div>
 
       {isAdmin && <dl className="stats">
