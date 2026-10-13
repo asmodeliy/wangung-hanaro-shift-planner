@@ -4,6 +4,8 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { Worker } from 'node:worker_threads'
+import multer from 'multer'
+import nodemailer from 'nodemailer'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
@@ -290,6 +292,79 @@ app.get('/api/employees', async (req, res) => {
     ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
     : await db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
+})
+const feedbackPages = { schedule: '월간 근무표', requests: '희망휴무', attendance: '근태 모니터링', employees: '직원 관리', settings: '운영 설정', common: '공통·로그인' }
+const feedbackUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024, files: 3, fields: 7, parts: 10 },
+  fileFilter: (_req, file, callback) => ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)
+    ? callback(null, true)
+    : callback(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname)),
+}).array('photos', 3)
+const htmlEscape = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+function validFeedbackImage(file) {
+  const bytes = file.buffer
+  if (file.mimetype === 'image/png') return bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  if (file.mimetype === 'image/jpeg') return bytes.length > 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+  if (file.mimetype === 'image/webp') return bytes.length > 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+  return false
+}
+app.get('/api/feedback/status', (req, res) => {
+  const sender = process.env.GMAIL_USER || 'rillerosion@gmail.com'
+  res.json({ configured: Boolean(process.env.GMAIL_APP_PASSWORD), sender })
+})
+app.post('/api/feedback', (req, res, next) => feedbackUpload(req, res, error => {
+  if (error) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? '사진 한 장은 1MB 이하로 올려 주세요.' : error.code === 'LIMIT_FILE_COUNT' ? '사진은 최대 3장까지 첨부할 수 있습니다.' : '첨부 파일을 확인해 주세요.' })
+  next()
+}), async (req, res) => {
+  const { category, page, area, detail, title, description } = req.body ?? {}
+  const clean = value => typeof value === 'string' ? value.trim() : ''
+  const fields = { category: clean(category), page: clean(page), area: clean(area), detail: clean(detail), title: clean(title), description: clean(description) }
+  if (!['bug', 'feedback'].includes(fields.category)) return res.status(400).json({ error: '피드백 종류를 선택해 주세요.' })
+  if (!Object.hasOwn(feedbackPages, fields.page)) return res.status(400).json({ error: '화면 위치를 선택해 주세요.' })
+  if (!fields.area || fields.area.length > 100 || fields.detail.length > 120) return res.status(400).json({ error: '수정 위치를 확인해 주세요.' })
+  if (fields.title.length < 3 || fields.title.length > 120) return res.status(400).json({ error: '제목은 3~120자로 입력해 주세요.' })
+  if (fields.description.length < 10 || fields.description.length > 5000) return res.status(400).json({ error: '내용은 10~5,000자로 입력해 주세요.' })
+  const photos = req.files ?? []
+  if (photos.some(file => !validFeedbackImage(file))) return res.status(400).json({ error: 'PNG, JPEG, WebP 사진만 첨부할 수 있습니다.' })
+  if (photos.reduce((total, file) => total + file.size, 0) > 3 * 1024 * 1024) return res.status(400).json({ error: '사진 전체 용량은 3MB 이하로 올려 주세요.' })
+  const sender = process.env.GMAIL_USER || 'rillerosion@gmail.com'
+  const appPassword = process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, '')
+  if (!appPassword) return res.status(503).json({ error: '피드백 메일 발송이 아직 연결되지 않았습니다. 관리자에게 Gmail 발송 설정을 요청해 주세요.' })
+  const typeName = fields.category === 'bug' ? '버그 신고' : '사용성 피드백'
+  const detailLines = [
+    `유형: ${typeName}`,
+    `화면: ${feedbackPages[fields.page]}`,
+    `위치: ${fields.area}${fields.detail ? ` · ${fields.detail}` : ''}`,
+    `작성자: ${req.user.username} (${req.user.role === 'admin' ? '관리자' : '직원'})`,
+    `접수 시각: ${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' }).format(new Date())}`,
+    '',
+    fields.description,
+  ]
+  const safeName = value => path.win32.basename(path.basename(value)).replace(/[\r\n]/g, '_').split('').filter(character => character.charCodeAt(0) >= 32).join('').slice(0, 150) || 'feedback-image'
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: sender, pass: appPassword },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+      disableFileAccess: true,
+      disableUrlAccess: true,
+    })
+    await transporter.sendMail({
+      from: `왕궁농협 하나로마트 피드백 <${sender}>`,
+      to: process.env.FEEDBACK_TO_EMAIL || 'rillerosion@gmail.com',
+      subject: `[${typeName}] ${fields.title}`,
+      text: detailLines.join('\n'),
+      html: `<h2>${htmlEscape(typeName)}: ${htmlEscape(fields.title)}</h2><p><b>화면</b>: ${htmlEscape(feedbackPages[fields.page])}<br><b>위치</b>: ${htmlEscape(fields.area)}${fields.detail ? ` · ${htmlEscape(fields.detail)}` : ''}<br><b>작성자</b>: ${htmlEscape(req.user.username)} (${req.user.role === 'admin' ? '관리자' : '직원'})</p><hr><p>${htmlEscape(fields.description).replace(/\n/g, '<br>')}</p>`,
+      attachments: photos.map(file => ({ filename: safeName(file.originalname), content: file.buffer, contentType: file.mimetype })),
+    })
+    res.json({ sent: true })
+  } catch (error) {
+    console.error('Feedback email delivery failed', error instanceof Error ? error.message : 'unknown error')
+    res.status(502).json({ error: '피드백 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.' })
+  }
 })
 app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'application/octet-stream', limit: '10mb' }), async (req, res, next) => {
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: '근태 엑셀 파일을 선택해 주세요.' })

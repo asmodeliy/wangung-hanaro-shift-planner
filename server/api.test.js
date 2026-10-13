@@ -26,7 +26,7 @@ before(async () => {
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Test server exited: ${code}`)) })
     child.once('error', error => { clearTimeout(timer); reject(error) })
   })
-  const result = await call('/api/auth/setup', 'POST', { username: 'testadmin', password: 'test-password-only-2026' }, false)
+  const result = await call('/api/auth/setup', 'POST', { username: 'testadmin', password: 'admin123@' }, false)
   assert.equal(result.status, 201)
   cookie = result.cookie
 })

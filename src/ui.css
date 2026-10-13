@@ -185,6 +185,41 @@ ul { margin: 0; padding: 0; list-style: none; }
   .attendance-unmatched li { grid-template-columns: 1fr; gap: 3px; }
 }
 
+/* ---------- Feedback ---------- */
+.feedback-form { max-width: 980px; width: 100%; gap: 14px; padding: 18px; }
+.feedback-config p, .feedback-success p { margin: 0; }
+.feedback-success { border-color: var(--green); background: var(--green-soft); color: var(--green-dark); }
+.feedback-kind { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.feedback-kind legend { margin-bottom: 7px; font-size: 13px; font-weight: 700; }
+.feedback-kind-option { display: flex; gap: 9px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
+.feedback-kind-option.is-selected { border-color: var(--green); background: var(--green-soft); }
+.feedback-kind-option input { margin-top: 3px; accent-color: var(--green); }
+.feedback-kind-option span, .feedback-kind-option small { display: block; }
+.feedback-kind-option small { margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.feedback-location { display: grid; grid-template-columns: 1fr 1.1fr 1.5fr; gap: 10px; }
+.feedback-location .field, .feedback-form > .field { min-width: 0; }
+.feedback-detail .muted, .feedback-photos .muted { font-weight: 400; }
+.feedback-form textarea { resize: vertical; min-height: 130px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.feedback-form textarea:focus { border-color: var(--green); outline: 2px solid var(--green-soft); }
+.feedback-form input[type='file'] { min-height: 38px; padding: 6px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface-2); }
+.feedback-photo-list { display: grid; gap: 4px; }
+.feedback-photo-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 6px 9px; border-radius: 7px; background: var(--surface-2); font-size: 12px; }
+.feedback-photo-list small { margin-left: 6px; color: var(--muted); }
+.feedback-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
+.feedback-submit-row small { max-width: 620px; }
+@media (max-width: 700px) {
+  .feedback-location { grid-template-columns: 1fr 1fr; }
+  .feedback-detail { grid-column: 1 / -1; }
+}
+@media (max-width: 480px) {
+  .feedback-form { padding: 14px; gap: 12px; }
+  .feedback-kind { grid-template-columns: 1fr; gap: 6px; }
+  .feedback-location { grid-template-columns: 1fr; }
+  .feedback-detail { grid-column: auto; }
+  .feedback-submit-row { align-items: stretch; flex-direction: column; }
+  .feedback-submit-row .btn { width: 100%; }
+}
+
 .alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); }
 .alert p { flex: 1; }
 .alert-error { background: var(--red-soft); border-color: var(--red); color: var(--red); }
@@ -385,20 +420,34 @@ th.has-warning { box-shadow: inset 0 -3px 0 var(--yellow); }
 .account.is-ready i { background: var(--green); }
 
 /* ---------- Settings ---------- */
-.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; align-items: start; }
+.settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.settings-grid > .panel.pad { gap: 10px; padding: 14px; }
+.settings-grid > .panel.pad > h2 { padding-bottom: 5px; border-bottom: 1px solid var(--line); }
 .rule-priority-panel { grid-column: 1 / -1; }
-.rule-matrix-wrap { overflow-x: auto; margin: 12px 0 20px; }
+.rule-matrix-wrap { overflow-x: auto; margin: 5px 0 8px; }
 .rule-matrix { width: 100%; min-width: 680px; border-collapse: collapse; }
-.rule-matrix th, .rule-matrix td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+.rule-matrix th, .rule-matrix td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; }
 .rule-matrix thead th { color: var(--muted); font-weight: 600; }
 .rule-matrix tbody th { font-weight: 600; }
 .rule-matrix select { min-width: 92px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .form-table { width: 100%; border-collapse: collapse; }
-.form-table th, .form-table td { padding: 6px 6px 6px 0; text-align: left; font-size: 13px; }
+.form-table th, .form-table td { padding: 4px 5px 4px 0; text-align: left; font-size: 12px; }
 .form-table thead th { color: var(--muted); font-weight: 600; }
-.form-table input { width: 100%; min-width: 104px; }
-.number-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.form-table input { width: 100%; min-width: 82px; min-height: 32px; padding: 4px 6px; }
+.number-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 8px; }
+.settings-grid .field { gap: 4px; font-size: 12px; }
+.settings-grid .field input, .settings-grid .field select, .settings-grid input[type='date'], .settings-grid input[type='time'] { min-height: 33px; padding: 4px 7px; }
+.settings-grid .check { gap: 7px; padding: 4px 0; font-size: 12px; }
+.settings-grid .check small { display: block; margin-top: 2px; line-height: 1.35; }
+.settings-grid .rule-priority-panel > p { line-height: 1.45; }
+.settings-grid .rule-priority-panel h3 { margin-top: 4px; font-size: 13px; }
+.settings-grid .date-chips { gap: 4px; }
+.settings-grid .date-chips button { padding: 2px 8px; font-size: 11px; }
+.settings-grid .list li { min-height: 34px; padding: 5px 8px; }
+.settings-grid .big-number { font-size: 30px; }
+@media (max-width: 1100px) { .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .settings-grid { grid-template-columns: 1fr; } .rule-priority-panel { grid-column: auto; } }
 .date-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .date-chips button { padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-2); font-size: 12px; }
 .date-chips button:hover { border-color: var(--red); color: var(--red); }
