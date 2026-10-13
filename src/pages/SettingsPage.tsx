@@ -93,7 +93,7 @@ export function SettingsPage({ app }: { app: AppState }) {
     </header>
 
     <div className="settings-grid">
-      <section className="panel pad">
+      <section className="panel pad settings-card-times">
         <h2>오픈 · 마감 시간</h2>
         <table className="form-table">
           <thead><tr><th>구분</th><th>직원</th><th>시작</th><th>종료</th></tr></thead>
@@ -108,7 +108,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="muted small">농산 담당·대직자는 별도 오픈 시간을 사용합니다.</p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-staffing">
         <h2>인원 기준</h2>
         <label className="field">인원 산정 방식
           <select value={ops.staffingMode} onChange={event => setOp('staffingMode', event.target.value as Operations['staffingMode'])}>
@@ -124,7 +124,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="muted small">최소 인원은 같은 구분의 목표 인원보다 클 수 없습니다.</p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-rest">
         <h2>월 휴무 산정</h2>
         <label className="field">직원별 기준 휴무 산정 방식
           <select value={ops.monthlyRestMode} onChange={event => setOp('monthlyRestMode', event.target.value as Operations['monthlyRestMode'])}>
@@ -133,9 +133,23 @@ export function SettingsPage({ app }: { app: AppState }) {
           </select>
         </label>
         {ops.monthlyRestMode === 'fixed' && <p className="muted small">고정 일수는 편성 규칙에서 지정합니다.</p>}
+        <hr/>
+        <h3 className="settings-subhead">공휴일 · 기준 휴무</h3>
+        <div className="stepper" role="group" aria-label="월 이동">
+          <button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button>
+        </div>
+        <p className="big-number">{restTarget}<small>일</small><span>직원별 기준 휴무</span></p>
+        {monthHolidays.length === 0 ? <p className="muted small">이번 달 공휴일이 없습니다.</p> : <ul className="list">{monthHolidays.map(item => <li key={item.date}>
+          <span><b>{item.date.slice(5).replace('-', '월 ')}일</b> {item.name}</span>
+          {settings.additionalHolidays.includes(item.date) && <button className="btn btn-sm btn-danger-ghost" onClick={() => void saveSettings({ ...settings, additionalHolidays: settings.additionalHolidays.filter(date => date !== item.date) })}>삭제</button>}
+        </li>)}</ul>}
+        <span className="inline">
+          <input type="date" value={holidayDate} onChange={event => setHolidayDate(event.target.value)} aria-label="추가 공휴일"/>
+          <button className="btn btn-sm" disabled={!holidayDate} onClick={() => void addHoliday()}>임시 공휴일 추가</button>
+        </span>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-rules">
         <h2>편성 규칙</h2>
         <div className="number-grid">
           {ruleFields.filter(([field]) => field !== 'monthlyRestDays' || ops.monthlyRestMode === 'fixed').map(([field, label, unit]) => <label className="field" key={field}>{label}
@@ -150,7 +164,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <label className="check"><input type="checkbox" checked={ops.noFullCloseAdjacent} onChange={event => setOp('noFullCloseAdjacent', event.target.checked)}/><span>일반직은 종일과 마감을 연달아 하지 않음 <small className="muted">종일 → 마감, 마감 → 종일 금지</small></span></label>
       </section>
 
-      <section className="panel pad rule-priority-panel">
+      <section className="panel pad rule-priority-panel settings-card-priority">
         <h2>자동 편성 룰 현황·우선순위</h2>
         <p className="muted small">숫자가 작을수록 더 우선합니다. 켜진 제약 룰은 1~3순위에서 필수로 고정하고, 4~19순위는 다른 조건과 충돌할 때 점수로 비교합니다. 희망휴무와 형평성은 순위에 따라 선호 점수가 달라집니다. 고정 입력은 항상 유지하고, 지키지 못한 룰은 후보의 확인 항목에 표시합니다.</p>
         <div className="rule-matrix-wrap"><table className="rule-matrix">
@@ -172,7 +186,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="muted small">기본값은 승인 희망휴무를 대기 신청보다 3배 선호합니다.</p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-dates">
         <h2>날짜별 예외</h2>
         <div className="field">농산 오픈 예외 날짜 <small className="muted">({monthLabel(month)})</small>
           <span className="inline">
@@ -196,7 +210,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="muted small">오늘 이전 일정은 기본적으로 수정할 수 없습니다. 추가한 날짜만 수정할 수 있습니다.</p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-pairs">
         <h2>동시 휴무 제한</h2>
         <p className="muted small">같은 날 함께 쉴 수 없는 직원 조합입니다.</p>
         {settings.daysOffPairs.length === 0 ? <p className="muted">등록된 제한이 없습니다.</p> : <ul className="list">{settings.daysOffPairs.map((pair, index) => <li key={index}>
@@ -206,21 +220,6 @@ export function SettingsPage({ app }: { app: AppState }) {
         <PairAdder employees={activeEmployees} existing={settings.daysOffPairs} onAdd={pair => update(current => ({ ...current, daysOffPairs: [...current.daysOffPairs, { employeeIds: pair }] }))}/>
       </section>
 
-      <section className="panel pad">
-        <h2>공휴일 · 기준 휴무</h2>
-        <div className="stepper" role="group" aria-label="월 이동">
-          <button aria-label="이전 달" onClick={() => changeMonth(-1)}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="다음 달" onClick={() => changeMonth(1)}>›</button>
-        </div>
-        <p className="big-number">{restTarget}<small>일</small><span>직원별 기준 휴무</span></p>
-        {monthHolidays.length === 0 ? <p className="muted">이번 달 공휴일이 없습니다.</p> : <ul className="list">{monthHolidays.map(item => <li key={item.date}>
-          <span><b>{item.date.slice(5).replace('-', '월 ')}일</b> {item.name}</span>
-          {settings.additionalHolidays.includes(item.date) && <button className="btn btn-sm btn-danger-ghost" onClick={() => void saveSettings({ ...settings, additionalHolidays: settings.additionalHolidays.filter(date => date !== item.date) })}>삭제</button>}
-        </li>)}</ul>}
-        <span className="inline">
-          <input type="date" value={holidayDate} onChange={event => setHolidayDate(event.target.value)} aria-label="추가 공휴일"/>
-          <button className="btn btn-sm" disabled={!holidayDate} onClick={() => void addHoliday()}>임시 공휴일 추가</button>
-        </span>
-      </section>
     </div>
 
     {user && <AdminAccountsPanel accounts={accounts} currentUserId={user.id} onChanged={() => void load()}/>}
