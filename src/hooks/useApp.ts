@@ -173,7 +173,7 @@ export function useApp() {
     const result = await api<{ user: User }>(setup ? '/api/auth/setup' : '/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, setupKey }) })
     setUser(result.user); setSetupNeeded(false); setPage('schedule'); setError('')
   }
-  const logout = async () => { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null); setEmployees([]); setShifts([]); setRequests([]) } }
+  const logout = async () => { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null); setPage('schedule'); setEmployees([]); setShifts([]); setRequests([]) } }
   const saveShift = async (employeeId: number, day: number, code: ShiftCode | '') => {
     const date = dateKey(new Date(month.getFullYear(), month.getMonth(), day))
     if (isLockedDate(date, settings)) { setError(`${date}는 지난 날짜라 고정되어 수정할 수 없습니다.`); return }

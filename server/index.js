@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
+import { compareAttendance, parseAttendanceWorkbook } from './attendance.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -177,6 +178,7 @@ app.use('/api', (req, res, next) => {
     && !pathname.startsWith('/api/auth/')
     && !pathname.startsWith('/api/users')
     && pathname !== '/api/shifts/options'
+    && pathname !== '/api/attendance/compare'
   if (mutating) {
     let revisionSaved = false
     const originalJson = res.json.bind(res)
@@ -288,6 +290,32 @@ app.get('/api/employees', async (req, res) => {
     ? (await db.prepare('SELECT id, name, employment_type AS employmentType, duty_type AS dutyType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active, notes, work_rules FROM employees ORDER BY sort_order, id').all()).map(({ work_rules, produceQualified, produceBackup, ...employee }) => ({ ...employee, produceQualified: Boolean(produceQualified), produceBackup: Boolean(produceBackup), workRules: JSON.parse(work_rules) }))
     : await db.prepare('SELECT id, name, active FROM employees ORDER BY sort_order, id').all()
   res.json(rows)
+})
+app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'application/octet-stream', limit: '10mb' }), async (req, res, next) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: '근태 엑셀 파일을 선택해 주세요.' })
+  const graceMinutes = Number(req.query.graceMinutes ?? 5)
+  if (!Number.isInteger(graceMinutes) || graceMinutes < 0 || graceMinutes > 60) return res.status(400).json({ error: '지각·조퇴 허용 시간은 0~60분으로 설정해 주세요.' })
+  let report
+  try { report = parseAttendanceWorkbook(req.body) }
+  catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : '근태 파일을 읽지 못했습니다.' }) }
+  const firstDate = new Date(`${report.from}T00:00:00Z`)
+  const lastDate = new Date(`${report.to}T00:00:00Z`)
+  if ((lastDate - firstDate) / 86400000 > 62) return res.status(400).json({ error: '한 번에 최대 63일 범위의 근태 내역을 비교할 수 있습니다.' })
+  try {
+    const [settings, employees] = await Promise.all([
+      readSettings(),
+      db.prepare('SELECT id, name, employment_type AS employmentType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active FROM employees ORDER BY sort_order, id').all(),
+    ])
+    const scheduled = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code
+      FROM shifts s WHERE s.shift_date >= ? AND s.shift_date <= ? ORDER BY s.shift_date, s.employee_id`).all(report.from, report.to)
+    const shifts = scheduled.map(shift => {
+      const employee = employees.find(row => Number(row.id) === Number(shift.employeeId))
+      if (!employee || shift.code === 'off') return { ...shift, employeeId: Number(shift.employeeId), start: null, end: null }
+      const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
+      return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
+    })
+    res.json(compareAttendance({ report, employees, shifts, graceMinutes }))
+  } catch (error) { next(error) }
 })
 app.get('/api/reference-schedule', requireAdmin, async (_req, res) => {
   const image = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png')

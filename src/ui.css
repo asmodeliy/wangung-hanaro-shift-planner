@@ -135,6 +135,56 @@ ul { margin: 0; padding: 0; list-style: none; }
 .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .count { margin-left: 6px; padding: 1px 8px; border-radius: 10px; background: var(--green-soft); color: var(--green); font-size: 12px; }
 
+/* ---------- Attendance monitoring ---------- */
+.attendance-upload { gap: 16px; }
+.attendance-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+.attendance-file { flex: 1 1 320px; }
+.attendance-file input { padding: 7px; }
+.attendance-grace { width: 180px; }
+.attendance-grace .unit input { width: 100px; }
+.attendance-submit { min-height: 38px; }
+.attendance-selected { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft, var(--green-soft)); }
+.attendance-selected span, .attendance-selected small { display: block; }
+.attendance-selected small { margin-top: 2px; color: var(--muted); font-size: 12px; }
+.attendance-note { margin: 0; }
+.attendance-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.attendance-stat { display: grid; gap: 5px; min-width: 0; padding: 14px; }
+.attendance-stat > span { color: var(--muted); font-size: 12px; }
+.attendance-stat strong { font-size: 25px; line-height: 1.2; }
+.attendance-stat strong small { margin-left: 3px; font-size: 13px; }
+.attendance-stat > small { color: var(--muted); font-size: 11px; }
+.attendance-stat.has-warning { border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+.attendance-results { min-width: 0; padding: 18px 0 0; overflow: hidden; }
+.attendance-result-head { align-items: end; padding: 0 18px 14px; }
+.attendance-filters { display: flex; align-items: end; gap: 8px; }
+.attendance-filters .field { min-width: 140px; }
+.attendance-filters select { min-height: 34px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); font-weight: 400; }
+.attendance-table-wrap { overflow: auto; border-top: 1px solid var(--line); }
+.attendance-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.attendance-table th, .attendance-table td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.attendance-table thead th { position: sticky; top: 0; background: var(--surface-soft, #f7f9f7); color: var(--muted); font-size: 11px; font-weight: 700; }
+.attendance-table tbody th { font-weight: 700; }
+.attendance-table td small, .attendance-table td > b + small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.attendance-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.status-ok { background: var(--green-soft); color: var(--green-dark); }
+.status-info { background: #e8f1fb; color: #285b8f; }
+.status-warning { background: #fff3d6; color: #805500; }
+.status-critical { background: var(--red-soft); color: var(--red); }
+.attendance-empty { padding: 28px 18px; color: var(--muted); text-align: center; }
+.attendance-unmatched ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.attendance-unmatched li { display: grid; grid-template-columns: minmax(90px, .6fr) minmax(200px, 1.4fr) minmax(180px, 1fr); gap: 10px; align-items: center; padding: 10px 12px; border-radius: 8px; background: var(--red-soft); font-size: 12px; }
+.attendance-unmatched li small { color: var(--muted); }
+@media (max-width: 900px) { .attendance-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+  .attendance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .attendance-results { padding-top: 14px; }
+  .attendance-result-head { display: grid; padding: 0 14px 12px; }
+  .attendance-filters { flex-wrap: wrap; }
+  .attendance-filters .field { flex: 1; min-width: 120px; }
+  .attendance-table th, .attendance-table td { padding: 10px; }
+  .attendance-unmatched li { grid-template-columns: 1fr; gap: 3px; }
+}
+
 .alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); }
 .alert p { flex: 1; }
 .alert-error { background: var(--red-soft); border-color: var(--red); color: var(--red); }

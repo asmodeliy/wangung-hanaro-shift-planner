@@ -17,4 +17,4 @@ export type PhotoImport = { month: string; entries: { employeeId: number; date: 
 export type Holiday = { date: string; name: string }
 export type ScheduleOption = { id: number; shifts: { employeeId: number; date: string; code: ShiftCode }[]; warnings: string[]; issues: string[]; optimal: boolean }
 export type ScheduleHistoryItem = { id: number; month: string; username: string; action: string; createdAt: string; shiftCount: number }
-export type Page = 'schedule' | 'requests' | 'employees' | 'settings'
+export type Page = 'schedule' | 'requests' | 'employees' | 'settings' | 'attendance'

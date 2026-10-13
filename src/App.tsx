@@ -9,9 +9,10 @@ import { SchedulePage } from './pages/SchedulePage'
 import { RequestsPage } from './pages/RequestsPage'
 import { EmployeesPage } from './pages/EmployeesPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { AttendancePage } from './pages/AttendancePage'
 
-const pageTitle: Record<Page, string> = { schedule: '월간 근무표', requests: '희망휴무', employees: '직원 관리', settings: '운영 설정' }
-const pageIcon = { schedule: 'calendar', requests: 'heart', employees: 'users', settings: 'settings' } as const
+const pageTitle: Record<Page, string> = { schedule: '월간 근무표', requests: '희망휴무', employees: '직원 관리', settings: '운영 설정', attendance: '근태 모니터링' }
+const pageIcon = { schedule: 'calendar', requests: 'heart', employees: 'users', settings: 'settings', attendance: 'clock' } as const
 
 function App() {
   const app = useApp()
@@ -24,7 +25,7 @@ function App() {
   if (!authChecked) return <div className="boot"><BrandMark/><span>왕궁농협 하나로마트</span></div>
   if (!user) return <AuthScreen setup={setupNeeded} setupKeyRequired={setupKeyRequired} error={error} onSubmit={authenticate}/>
 
-  const pages: Page[] = isAdmin ? ['schedule', 'requests', 'employees', 'settings'] : ['schedule', 'requests']
+  const pages: Page[] = isAdmin ? ['schedule', 'requests', 'attendance', 'employees', 'settings'] : ['schedule', 'requests']
   return <div className="shell">
     <div className="nav-edge" aria-hidden="true"/>
     <aside className={`sidebar ${navOpen ? 'is-open' : ''}`} onMouseLeave={() => setNavOpen(false)}>
@@ -53,6 +54,7 @@ function App() {
         {page === 'requests' && <RequestsPage app={app}/>}
         {page === 'employees' && isAdmin && <EmployeesPage app={app}/>}
         {page === 'settings' && isAdmin && <SettingsPage app={app}/>}
+        {page === 'attendance' && isAdmin && <AttendancePage/>}
       </main>
     </div>
 
