@@ -362,7 +362,10 @@ app.post('/api/feedback', (req, res, next) => feedbackUpload(req, res, error => 
     })
     res.json({ sent: true })
   } catch (error) {
-    console.error('Feedback email delivery failed', error instanceof Error ? error.message : 'unknown error')
+    const mailError = error instanceof Error ? error.message : ''
+    const authenticationRejected = error?.code === 'EAUTH' || error?.responseCode === 535 || /535-5\.7\.8|BadCredentials/i.test(mailError)
+    console.error('Feedback email delivery failed', authenticationRejected ? 'Gmail authentication rejected the configured sender credentials' : mailError || 'unknown error')
+    if (authenticationRejected) return res.status(502).json({ error: `Gmail 인증이 거부되었습니다. Vercel의 GMAIL_APP_PASSWORD가 GMAIL_USER 계정(${sender})에서 발급한 앱 비밀번호인지 확인해 주세요.` })
     res.status(502).json({ error: '피드백 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.' })
   }
 })
