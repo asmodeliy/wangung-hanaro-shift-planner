@@ -13,7 +13,7 @@ export const defaultOperationRules = {
   functionalMinOnDuty: 2, supportMaxOff: 2, produceOpenCount: 0,
   requireRegularEachShift: true, weekendRegularFullShift: true, requireProduceOpener: true, noConsecutiveClose: true, noFullCloseAdjacent: true, maxConsecutiveWorkDays: 0,
   maxWishDaysPerEmployee: 0, supportMaxRequestsPerDate: 2, requestDueDay: 15, publishDay: 20,
-  allowFullShiftGeneration: false, approvedWishWeight: 3, pendingWishWeight: 1,
+  allowFullShiftGeneration: true, approvedWishWeight: 3, pendingWishWeight: 1,
   weeklyRestBalanceWeight: 100, weekendRestFairnessWeight: 100, shiftRotationWeight: 100, openCloseBalanceWeight: 100,
   rulePriorities: defaultRulePriorities,
 }
@@ -127,7 +127,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
       else if (count < staffingRule.target) warnings.push({ date, text: `${date} ${label} 목표 인원 미달 (${count}명 / 목표 ${staffingRule.target}명, 최소 기준 충족)` })
     }
     for (const code of ['open', 'close']) if (rules.requireRegularEachShift && !employees.some(e => e.employmentType === '정규직' && covers(entries.get(`${e.id}:${date}`), code))) issues.push({ date, text: `${date} ${code === 'open' ? '오픈' : '마감'} 정규직 없음` })
-    if (rules.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
+    if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
       const regularFullCount = employees.filter(employee => employee.employmentType === '정규직' && entries.get(`${employee.id}:${date}`) === 'full').length
       if (regularFullCount !== 1) issues.push({ date, text: `${date} 주말 정규직 종일근무 ${regularFullCount}명 (필요 1명)` })
     }
@@ -139,7 +139,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
       }
     }
     const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
-    if (rules.weekendRegularFullShift && (weekday === 6 || (weekday === 0 && !dates.includes(shiftDay(date, -1))))) {
+    if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration && (weekday === 6 || (weekday === 0 && !dates.includes(shiftDay(date, -1))))) {
       const saturdayKey = weekday === 6 ? date : shiftDay(date, -1)
       const sundayKey = weekday === 6 ? shiftDay(date, 1) : date
       for (const employee of employees.filter(employee => employee.employmentType === '정규직')) {
@@ -158,7 +158,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     if (supportEmployees.length > 0 && supportOff > rules.supportMaxOff) issues.push({ date, text: `${date} 계약직 휴무 초과 (${supportOff}명 / 최대 ${rules.supportMaxOff}명)` })
     if (rules.produceOpenCount > 0 && !(settings.produceOpenExceptions ?? []).includes(date) && produceEmployees.length >= rules.produceOpenCount && produceOpen < rules.produceOpenCount) issues.push({ date, text: `${date} 농산 담당 오픈조 부족 (${produceOpen}명 / 필요 ${rules.produceOpenCount}명, 재직 담당 ${produceEmployees.length}명)` })
   }
-  if (rules.weekendRegularFullShift) for (const employee of employees.filter(item => item.employmentType === '정규직')) {
+  if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration) for (const employee of employees.filter(item => item.employmentType === '정규직')) {
     const fullByWeek = new Map()
     for (const shift of [...adjacentShifts, ...shifts].filter(item => item.employeeId === employee.id && item.code === 'full')) {
       const weekStart = weekDates(shift.date)[0]
@@ -266,7 +266,7 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
   for (const date of dates) {
     const workers = employees.filter(employee => cells.get(`${employee.id}:${date}`) !== 'off')
     const hasShift = (employee, code) => cells.get(`${employee.id}:${date}`) === code || cells.get(`${employee.id}:${date}`) === 'full'
-    if (operations.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) && !workers.some(employee => employee.employmentType === '정규직' && cells.get(`${employee.id}:${date}`) === 'full')) {
+    if (operations.weekendRegularFullShift && operations.allowFullShiftGeneration && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()) && !workers.some(employee => employee.employmentType === '정규직' && cells.get(`${employee.id}:${date}`) === 'full')) {
       const week = weekDates(date)
       const weekFullCount = employee => adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.code === 'full' && week.includes(shift.date)).length + week.filter(day => cells.get(`${employee.id}:${day}`) === 'full').length
       const candidates = workers.filter(employee => employee.employmentType === '정규직' && !fixed.has(`${employee.id}:${date}`) && ['open', 'close'].every(code => (employee.workRules?.allowedShifts ?? defaultRules.allowedShifts).includes(code)) && codeBefore(employee, date) !== 'full' && weekFullCount(employee) < 1)
@@ -367,7 +367,7 @@ export async function generateSchedule(input) {
       if (pinned) eq([variable(employee.id, date, pinned)], 1)
       else {
         const operations = operationRules(settings)
-        const weekendFullAllowed = operations.weekendRegularFullShift && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
+        const weekendFullAllowed = operations.weekendRegularFullShift && operations.allowFullShiftGeneration && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
         if (!weekendFullAllowed || !['open', 'close'].every(code => rules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
       }
       // Seeded tie-break keeps each alternative reproducible while exploring another valid arrangement.
@@ -550,7 +550,7 @@ export async function generateSchedule(input) {
       // but a day with every regular off is avoidable and must never be emitted.
       lo(employees.filter(e => e.employmentType === '정규직').flatMap(e => ['open', 'close', 'full'].map(code => variable(e.id, date, code))), 1)
     }
-    if (rules.weekendRegularFullShift && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
+    if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) {
       const missing = `missing_weekend_regular_full_${date.replaceAll('-', '')}`
       lp.bounds.push({ name: missing, type: glpk.GLP_LO, lb: 0, ub: 0 })
       const regularFullShifts = employees.filter(employee => employee.employmentType === '정규직').map(employee => variable(employee.id, date, 'full'))
@@ -559,7 +559,7 @@ export async function generateSchedule(input) {
       weekendFullShiftSlacks.push({ name: missing, coef: 1 })
     }
     const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
-    if (rules.weekendRegularFullShift && weekday === 6) {
+    if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration && weekday === 6) {
       // Full shifts are only possible on Saturday and Sunday, so this paired-day
       // limit is also the one-full-shift-per-employee-per-week limit.
       const sundayKey = shiftDay(date, 1)
@@ -571,7 +571,7 @@ export async function generateSchedule(input) {
         const nextWeekendFulls = adjacentShifts.filter(shift => shift.date === sundayKey && shift.code === 'full').map(shift => shift.employeeId)
         for (const employeeId of nextWeekendFulls) if (employees.some(employee => employee.id === employeeId && employee.employmentType === '정규직')) eq([variable(employeeId, date, 'full')], 0)
       }
-    } else if (rules.weekendRegularFullShift && weekday === 0 && !dates.includes(shiftDay(date, -1))) {
+    } else if (rules.weekendRegularFullShift && rules.allowFullShiftGeneration && weekday === 0 && !dates.includes(shiftDay(date, -1))) {
       const previousWeekendFulls = adjacentShifts.filter(shift => shift.date === shiftDay(date, -1) && shift.code === 'full').map(shift => shift.employeeId)
       for (const employeeId of previousWeekendFulls) if (employees.some(employee => employee.id === employeeId && employee.employmentType === '정규직')) eq([variable(employeeId, date, 'full')], 0)
     }

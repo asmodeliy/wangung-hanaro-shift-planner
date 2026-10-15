@@ -67,7 +67,7 @@ async function readSettings() {
       close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
       produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
     },
-    operations: { ...defaultOperationRules, ...stored.operations, allowFullShiftGeneration: false, rulePriorities: { ...defaultRulePriorities, ...stored.operations?.rulePriorities } },
+    operations: { ...defaultOperationRules, ...stored.operations, rulePriorities: { ...defaultRulePriorities, ...stored.operations?.rulePriorities } },
   }
   delete settings.operations.avoidUnneededProduceBackup
   settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
@@ -89,6 +89,17 @@ function shiftTimesForEmployee(employmentType, code, settings, produceQualified 
 }
 async function saveSettings(value) {
   await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value').run('main', JSON.stringify(value))
+}
+const fullShiftMigration = await db.prepare('SELECT 1 FROM app_settings WHERE setting_key = ?').get('migration:allow-full-shift-generation')
+if (!fullShiftMigration) {
+  const row = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('main')
+  if (row) {
+    const value = JSON.parse(row.setting_value)
+    value.operations = { ...defaultOperationRules, ...value.operations }
+    value.operations.allowFullShiftGeneration = true
+    await saveSettings(value)
+  }
+  await db.prepare('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO NOTHING').run('migration:allow-full-shift-generation', 'done')
 }
 async function runTransaction(asyncWork) {
   return db.transaction(asyncWork)()
@@ -557,7 +568,6 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
   }
   if (incoming.operations !== undefined) {
     const operations = { ...settings.operations, ...incoming.operations }
-    operations.allowFullShiftGeneration = false
     operations.rulePriorities = { ...defaultRulePriorities, ...settings.operations.rulePriorities, ...incoming.operations.rulePriorities }
     const ranges = {
       minimumEmployeesForGeneration: [0, 100],
@@ -574,7 +584,7 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     if (!operations.rulePriorities || typeof operations.rulePriorities !== 'object' || Array.isArray(operations.rulePriorities) || Object.keys(operations.rulePriorities).some(key => !(key in defaultRulePriorities)) || Object.keys(defaultRulePriorities).some(key => !Number.isInteger(operations.rulePriorities[key]) || operations.rulePriorities[key] < 1 || operations.rulePriorities[key] > 19)) return res.status(400).json({ error: '자동 편성 우선순위는 1~19 사이 정수로 설정해 주세요.' })
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
     for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '정규직·계약직 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
-    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: false, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
+    settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: operations.allowFullShiftGeneration, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   const previous = await readSettings()
@@ -783,8 +793,23 @@ app.post('/api/requests', async (req, res) => {
 app.patch('/api/requests/:id', requireAdmin, async (req, res) => {
   const status = req.body?.status
   if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: '신청 상태를 확인해 주세요.' })
-  const result = await db.prepare('UPDATE requests SET status = ? WHERE id = ?').run(status, Number(req.params.id))
-  if (!result.changes) return res.status(404).json({ error: '신청을 찾을 수 없습니다.' })
+  const request = await db.prepare('SELECT employee_id AS employeeId, request_date AS date, status FROM requests WHERE id = ?').get(Number(req.params.id))
+  if (!request) return res.status(404).json({ error: '신청을 찾을 수 없습니다.' })
+  if (status === 'approved') {
+    const month = request.date.slice(0, 7)
+    await runTransaction(async () => {
+      await recordScheduleHistory(month, req.user.username, `${request.date} 희망휴무 승인 및 고정`)
+      await db.prepare('UPDATE requests SET status = ? WHERE id = ?').run(status, Number(req.params.id))
+      await db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, 'off')
+        ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = 'off', updated_at = CURRENT_TIMESTAMP`).run(request.employeeId, request.date)
+      await db.prepare(`INSERT INTO shift_locks (employee_id, shift_date, code) VALUES (?, ?, 'off')
+        ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = 'off'`).run(request.employeeId, request.date)
+      await db.prepare('INSERT INTO locked_months (month) VALUES (?) ON CONFLICT(month) DO NOTHING').run(month)
+    })
+    await invalidateConfirmed()
+  } else {
+    await db.prepare('UPDATE requests SET status = ? WHERE id = ?').run(status, Number(req.params.id))
+  }
   res.json({ ok: true })
 })
 app.delete('/api/requests/:id', async (req, res) => {

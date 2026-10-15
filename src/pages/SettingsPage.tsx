@@ -158,6 +158,7 @@ export function SettingsPage({ app }: { app: AppState }) {
           </label>)}
         </div>
         <label className="check"><input type="checkbox" checked={ops.requireRegularEachShift} onChange={event => setOp('requireRegularEachShift', event.target.checked)}/><span>오픈·마감에 일반직을 각각 한 명 이상 배치</span></label>
+        <label className="check"><input type="checkbox" checked={ops.allowFullShiftGeneration} onChange={event => setOp('allowFullShiftGeneration', event.target.checked)}/><span>자동 편성에서 주말 종일근무 생성 허용 <small className="muted">정규직만 가능하며 한 주에 최대 1회입니다.</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.weekendRegularFullShift} onChange={event => setOp('weekendRegularFullShift', event.target.checked)}/><span>주말 종일근무 <small className="muted">주말 정규직만 가능, 토·일 각각 1명, 정규직 한 명당 주 1회만 배정합니다. 평일·계약직 종일은 금지합니다.</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.requireProduceOpener} onChange={event => setOp('requireProduceOpener', event.target.checked)}/><span>매일 농산 담당자 또는 대직자 오픈 배치</span></label>
         <label className="check"><input type="checkbox" checked={ops.noConsecutiveClose} onChange={event => setOp('noConsecutiveClose', event.target.checked)}/><span>일반직은 마감을 이틀 연속 하지 않음 <small className="muted">마감 → 마감 금지</small></span></label>
@@ -166,7 +167,7 @@ export function SettingsPage({ app }: { app: AppState }) {
 
       <section className="panel pad rule-priority-panel settings-card-priority">
         <h2>자동 편성 룰 현황·우선순위</h2>
-        <p className="muted small">숫자가 작을수록 더 우선합니다. 켜진 제약 룰은 1~3순위에서 필수로 고정하고, 4~19순위는 다른 조건과 충돌할 때 점수로 비교합니다. 희망휴무와 형평성은 순위에 따라 선호 점수가 달라집니다. 고정 입력은 항상 유지하고, 지키지 못한 룰은 후보의 확인 항목에 표시합니다.</p>
+        <p className="muted small">숫자가 작을수록 더 우선합니다. 켜진 제약 룰은 1~3순위에서 필수로 고정하고, 4~19순위는 다른 조건과 충돌할 때 점수로 비교합니다. 희망휴무와 형평성은 순위에 따라 선호 점수가 달라집니다. 기준 휴무 초과를 줄이려면 ‘월 기준 휴무 일수’를 1~3순위로 올려 보세요. 다만 고정 근무나 직원별 휴무 조건과 충돌하면 가능한 편성이 줄어들 수 있습니다. 지키지 못한 룰은 후보의 확인 항목에 표시합니다.</p>
         <div className="rule-matrix-wrap"><table className="rule-matrix">
           <thead><tr><th scope="col">자동 편성 룰</th><th scope="col">상태</th><th scope="col">현재 설정</th><th scope="col">우선순위</th></tr></thead>
           <tbody>{sortedPriorityRows.map(row => <tr key={row.key}>
