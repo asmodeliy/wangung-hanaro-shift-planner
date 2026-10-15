@@ -81,7 +81,7 @@ export function RequestsPage({ app }: { app: AppState }) {
             </li>
           })}</ul>}
         <p className="muted small">{isAdmin
-          ? `매월 ${rules.requestDueDay}일 전후 다음 달 희망휴무를 취합하고 ${rules.publishDay}일 전후 근무표를 공유하세요. 승인된 신청은 자동 편성에 우선 반영됩니다.`
+          ? `매월 ${rules.requestDueDay}일 전후 다음 달 희망휴무를 취합하고 ${rules.publishDay}일 전후 근무표를 공유하세요. 승인된 신청은 월표에 휴무로 등록되고 자동 편성에서 고정됩니다.`
           : `다음 달에 꼭 필요한 날짜 위주로 매월 ${rules.requestDueDay}일까지 신청해 주세요.${rules.maxWishDaysPerEmployee > 0 ? ` 월 최대 ${rules.maxWishDaysPerEmployee}일까지 신청할 수 있습니다.` : ''} 근무표는 ${rules.publishDay}일 전후 공유됩니다.`}</p>
       </section>
     </div>
