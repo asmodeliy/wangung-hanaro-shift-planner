@@ -19,7 +19,7 @@ const root = path.resolve(here, '..')
 const isHosted = process.env.VERCEL === '1'
 if (!process.env.DATABASE_URL) throw new Error('Neon 연결을 위해 DATABASE_URL 환경변수를 설정해 주세요.')
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data')
-mkdirSync(dataDir, { recursive: true })
+if (!isHosted) mkdirSync(dataDir, { recursive: true })
 const db = postgres
 await initializePostgres()
 
