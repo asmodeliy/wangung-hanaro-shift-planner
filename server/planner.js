@@ -404,7 +404,16 @@ export async function generateSchedule(input) {
     // Preserve rotation rules at the following month's boundary as well.
     if (closeRotationApplies(employee)) {
       const next = adjacentShifts.find(shift => shift.employeeId === employee.id && shift.date === shiftDay(dates.at(-1), 1))?.code
-      for (const code of codes) if (closeRotationConflict(code, next, rules)) eq([variable(employee.id, dates.at(-1), code)], 0)
+      for (const code of codes) if (closeRotationConflict(code, next, rules)) {
+        const priorityKey = code === 'close' && next === 'close' ? 'consecutiveClose' : 'fullCloseAdjacent'
+        if (rules.rulePriorities[priorityKey] <= 3) eq([variable(employee.id, dates.at(-1), code)], 0)
+        else {
+          const violation = `rotation_next_violation_${employee.id}_${code}`
+          lp.bounds.push({ name: violation, type: glpk.GLP_LO, lb: 0, ub: 0 })
+          up([variable(employee.id, dates.at(-1), code), { name: violation, coef: -1 }], 0)
+          ruleViolationSlacks.push({ name: violation, coef: 1, priorityKey })
+        }
+      }
     }
     const deviation = `balance_${employee.id}`
     const priorBalance = adjacentShifts.filter(shift => shift.employeeId === employee.id && shift.date.startsWith(`${previousMonth}-`)).reduce((sum, shift) => sum + (shift.code === 'open' ? 1 : shift.code === 'close' ? -1 : 0), 0)

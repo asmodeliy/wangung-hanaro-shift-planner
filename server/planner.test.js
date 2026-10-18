@@ -91,7 +91,8 @@ test('employee recurring weekdays and allowed shift types are mandatory', async 
   verify(input, result)
   for (const employee of input.employees) for (const shift of result.shifts.filter(s => s.employeeId === employee.id)) {
     if (isRequiredOff(employee, shift.date)) assert.equal(shift.code, 'off')
-    if (shift.code !== 'off') assert.ok(employee.workRules.allowedShifts.includes(shift.code))
+    if (shift.code === 'full') assert.ok(['open', 'close'].every(code => employee.workRules.allowedShifts.includes(code)))
+    else if (shift.code !== 'off') assert.ok(employee.workRules.allowedShifts.includes(shift.code))
   }
 })
 test('fill mode retains every prior work and rest assignment', async () => {
@@ -113,20 +114,16 @@ test('rebalance keeps locked cells and prioritizes regular coverage on requested
     assert.ok(result.shifts.some(s => s.date === date && s.code === code && employees.find(e => e.id === s.employeeId)?.employmentType === '정규직'))
   }
 })
-test('rebalance prefers Jinhaegyeong or Chayongho over Ehwajin on regular-gap dates except the exclusion', async () => {
+test('regular-gap preference does not introduce avoidable coverage gaps', async () => {
   const input = {
     ...base(), month: '2026-10', holidays: ['2026-10-05', '2026-10-09', '2026-10-12', '2026-10-26'],
     preferEmployeeOffOnRegularGap: { employeeId: 2, excludedDates: ['2026-10-17'] },
   }
   const result = await generateSchedule(input)
   assert.equal(result.error, undefined)
-  const gaps = new Set(result.warnings.flatMap(warning => [...warning.matchAll(/(2026-10-\d{2}) (?:오픈|마감) 정규직 없음/g)].map(match => match[1])))
-  assert.ok(gaps.size > 0)
-  for (const date of gaps) {
-    if (date === '2026-10-17') continue
-    assert.notEqual(result.shifts.find(shift => shift.employeeId === 2 && shift.date === date)?.code, 'open')
-    assert.notEqual(result.shifts.find(shift => shift.employeeId === 2 && shift.date === date)?.code, 'close')
-  }
+  const validation = validateSchedule({ ...input, shifts: result.shifts })
+  assert.equal(validation.issues.some(issue => /정규직 없음/.test(issue.text)), false)
+  verify(input, result)
 })
 test('weekday and holiday targets are five and four, with fallback-only staffing warnings', async () => {
   assert.equal(minimumWorkersForDate('2026-09-30'), 5)
@@ -162,7 +159,7 @@ test('employment type staffing mode applies separate targets, floors, validation
   const input = { ...base(), settings: { ...base().settings, operations } }
   const result = await generateSchedule(input)
   assert.equal(result.error, undefined)
-  const day = result.shifts.filter(shift => shift.date === date && ['open', 'close'].includes(shift.code))
+  const day = result.shifts.filter(shift => shift.date === date && ['open', 'close', 'full'].includes(shift.code))
   assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '정규직').length >= 1)
   assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '계약직').length >= 2)
   assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues, [])
@@ -173,7 +170,7 @@ test('October staffing never drops below the relaxed threshold when three people
   const input = { ...base(), month: '2026-10', mode: 'rebalance', lockedThroughDate: '2026-10-08', existingShifts }
   const result = await generateSchedule(input)
   assert.equal(result.error, undefined)
-  assert.equal(result.shifts.filter(shift => shift.date === fixedDay && ['open', 'close'].includes(shift.code)).length, 3)
+  assert.equal(result.shifts.filter(shift => shift.date === fixedDay && ['open', 'close', 'full'].includes(shift.code)).length, 3)
   assert.equal(result.warnings.some(warning => warning.includes(`${fixedDay} 최소 근무인원 미충족`)), false)
   const belowFallback = employees.map(employee => ({ employeeId: employee.id, date: fixedDay, code: employee.id === 1 ? 'open' : employee.id === 7 ? 'close' : 'off' }))
   assert.ok(validateSchedule({ ...input, shifts: belowFallback }).issues.some(issue => issue.text === `${fixedDay} 최소 근무인원 미충족 (2명 / 완화 기준 3명)`))
@@ -185,7 +182,7 @@ test('minimum staffing remains feasible while mandatory regular coverage is main
   const regularIds = input.employees.filter(employee => employee.employmentType === '정규직').map(employee => employee.id)
   for (const date of monthDates(input.month)) {
     const day = result.shifts.filter(s => s.date === date)
-    assert.ok(day.filter(s => ['open', 'close'].includes(s.code)).length >= 3)
+    assert.ok(day.filter(s => ['open', 'close', 'full'].includes(s.code)).length >= 3)
     assert.ok(day.some(s => regularIds.includes(s.employeeId) && s.code !== 'off'), `${date} has all regular employees off`)
   }
 })
@@ -195,10 +192,10 @@ test('November default keeps the staffing floor and balances daily open and clos
   assert.equal(result.error, undefined)
   for (const date of monthDates(input.month)) {
     const day = result.shifts.filter(shift => shift.date === date)
-    const working = day.filter(shift => shift.code === 'open' || shift.code === 'close').length
+    const working = day.filter(shift => ['open', 'close', 'full'].includes(shift.code)).length
     const opens = day.filter(shift => shift.code === 'open').length
     const closes = day.filter(shift => shift.code === 'close').length
-    assert.ok(working >= fallbackMinimumWorkersForDate(date, input.holidays), `${date} below fallback floor`)
+    assert.ok(working >= fallbackMinimumWorkersForDate(date, input.holidays, input.settings.operations), `${date} below fallback floor`)
     assert.ok(Math.abs(opens - closes) <= 1, `${date} open/close teams are imbalanced: ${opens}/${closes}`)
   }
 })
