@@ -18,7 +18,10 @@ const pageIcon = { schedule: 'calendar', requests: 'heart', employees: 'users', 
 function App() {
   const app = useApp()
   const [navOpen, setNavOpen] = useState(false)
-  const [showTestAdminNotice, setShowTestAdminNotice] = useState(() => localStorage.getItem('wangung-account-notice:testadmin-20261015') !== 'dismissed')
+  const [dismissedAccountNotices, setDismissedAccountNotices] = useState<string[]>(() => [
+    ...(localStorage.getItem('wangung-account-notice:testadmin-20261015') === 'dismissed' ? ['testadmin'] : []),
+    ...(localStorage.getItem('wangung-account-notice:charm1596-20261018') === 'dismissed' ? ['charm1596'] : []),
+  ])
   const [feedbackOrigin, setFeedbackOrigin] = useState<Exclude<Page, 'feedback'>>('schedule')
   const {
     authChecked, user, setupNeeded, setupKeyRequired, error, setError, authenticate, page, setPage, isAdmin, pendingCount,
@@ -29,6 +32,8 @@ function App() {
   if (!user) return <AuthScreen setup={setupNeeded} setupKeyRequired={setupKeyRequired} error={error} onSubmit={authenticate}/>
 
   const pages: Page[] = isAdmin ? ['schedule', 'requests', 'attendance', 'feedback', 'employees', 'settings'] : ['schedule', 'requests', 'feedback']
+  const accountNoticeUsers = ['testadmin', 'charm1596']
+  const showAccountNotice = accountNoticeUsers.includes(user.username) && !dismissedAccountNotices.includes(user.username)
   return <div className="shell">
     <div className="nav-edge" aria-hidden="true"/>
     <aside className={`sidebar ${navOpen ? 'is-open' : ''}`} onMouseLeave={() => setNavOpen(false)}>
@@ -53,9 +58,13 @@ function App() {
       </header>
       <main className="content">
         {error && <div className="alert alert-error" role="alert"><p>{error}</p><button className="btn btn-sm" onClick={() => setError('')}>확인</button></div>}
-        {user.username === 'testadmin' && showTestAdminNotice && <section className="account-notice" role="status" aria-label="계정 안내">
+        {showAccountNotice && <section className="account-notice" role="status" aria-label="계정 안내">
           <div><b>근무표 업데이트 안내</b><p>승인된 희망휴무는 월표에 휴무로 반영되고 자동 편성에서 고정됩니다. 자동 편성의 주말 종일근무 허용 여부는 운영 설정에서 조정할 수 있습니다. 기준 휴무보다 많이 배정되는 경우 운영 설정의 룰 우선순위에서 ‘월 기준 휴무 일수’를 1~3으로 올려 보세요. 숫자가 낮을수록 우선하며, 고정 근무나 직원별 휴무 조건과 충돌하면 가능한 편성이 줄 수 있습니다.</p></div>
-          <button className="btn btn-sm" onClick={() => { localStorage.setItem('wangung-account-notice:testadmin-20261015', 'dismissed'); setShowTestAdminNotice(false) }}>확인</button>
+          <button className="btn btn-sm" onClick={() => {
+            const key = `wangung-account-notice:${user.username}-${user.username === 'testadmin' ? '20261015' : '20261018'}`
+            localStorage.setItem(key, 'dismissed')
+            setDismissedAccountNotices(previous => [...previous, user.username])
+          }}>확인</button>
         </section>}
         {page === 'schedule' && <SchedulePage app={app}/>}
         {page === 'requests' && <RequestsPage app={app}/>}
