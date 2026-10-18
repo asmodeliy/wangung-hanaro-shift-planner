@@ -971,7 +971,15 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
         const signature = result.shifts.map(shift => `${shift.employeeId}:${shift.date}:${shift.code}`).join('|')
         if (seen.has(signature)) continue
         seen.add(signature)
-        const option = { id: 0, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal, issues: issues.map(issue => issue.text) }
+        const stats = validateSchedule({ ...input, shifts: result.shifts }).stats
+        const weekendCount = monthDates(month).filter(date => [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())).length
+        const weekendRestCounts = stats.map(stat => weekendCount - stat.weekendWork)
+        const weekendRestMin = weekendRestCounts.length ? Math.min(...weekendRestCounts) : 0
+        const weekendRestMax = weekendRestCounts.length ? Math.max(...weekendRestCounts) : 0
+        const weekendRestSpread = weekendRestMax - weekendRestMin
+        const averageWeekendRest = weekendRestCounts.length ? weekendRestCounts.reduce((sum, count) => sum + count, 0) / weekendRestCounts.length : 0
+        const weekendRestVariance = weekendRestCounts.reduce((sum, count) => sum + (count - averageWeekendRest) ** 2, 0)
+        const option = { id: 0, shifts: result.shifts, warnings: [...new Set(result.warnings ?? [])], optimal: result.optimal, issues: issues.map(issue => issue.text), missedRequests: result.missedRequests?.length ?? 0, weekendRestMin, weekendRestMax, weekendRestSpread, weekendRestVariance }
         const regularEmployees = input.employees.filter(employee => employee.employmentType === '정규직')
         const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !result.shifts.some(shift => shift.employeeId === employee.id && shift.date === date && shift.code !== 'off')))
         if (hasAllRegularOffDay) {
@@ -1004,7 +1012,10 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     }
     // Recommend the strongest candidate first so the default selection is the
     // most complete plan, not merely the first seed that happened to solve.
-    options.sort((a, b) => a.issues.length - b.issues.length || Number(b.optimal) - Number(a.optimal) || a.warnings.length - b.warnings.length)
+    // When several candidates satisfy the rules, recommend the one that gives
+    // the most even Saturday/Sunday rest distribution. Previously the first
+    // solver seed won ties, even if its weekend assignments were much less fair.
+    options.sort((a, b) => a.issues.length - b.issues.length || Number(b.optimal) - Number(a.optimal) || a.missedRequests - b.missedRequests || a.weekendRestSpread - b.weekendRestSpread || a.weekendRestVariance - b.weekendRestVariance || a.warnings.length - b.warnings.length)
     options.forEach((option, index) => { option.id = index + 1 })
     const explored = results.length
     const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error

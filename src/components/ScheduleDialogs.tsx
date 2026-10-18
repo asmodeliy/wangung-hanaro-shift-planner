@@ -25,6 +25,7 @@ export function OptionsDialog({ app }: { app: AppState }) {
         <button type="button" className={selectedOption?.id === option.id ? 'is-selected' : ''} onClick={() => setSelectedOptionId(option.id)}>
           <b>대안 {option.id} {option.id === 1 && <span className="option-recommended">{scheduleOptions.bestEffort ? '최선안' : '추천'}</span>}</b>
           <small>{option.issues.length ? `필수 규칙 미충족 ${option.issues.length}건` : option.warnings.length ? `확인 항목 ${option.warnings.length}건` : '운영 기준 충족'}</small>
+          {option.weekendRestMin != null && option.weekendRestMax != null && <small>주말 휴무 {option.weekendRestMin}~{option.weekendRestMax}일</small>}
           {option.issues.slice(0, 3).map((issue, index) => <small className="is-warn" key={`issue-${index}-${issue}`}>{issue}</small>)}
           {option.issues.length > 3 && <small className="is-warn">위반 항목 외 {option.issues.length - 3}건</small>}
           {option.warnings.slice(0, 3).map((warning, index) => <small className="is-warn" key={`${index}-${warning}`}>{warning}</small>)}

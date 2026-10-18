@@ -589,8 +589,13 @@ export async function generateSchedule(input) {
   // interactive path responsive; explicit one-shot generation gets the longer budget.
   const quickAlternativeSearch = input.alternativeSearch === true
   const staffingTimeLimit = quickAlternativeSearch ? 4 : 12
-  const finalTimeLimit = quickAlternativeSearch ? 3 : 10
-  const mipGap = quickAlternativeSearch ? 0.02 : 0
+  // Alternative schedules used to stop the fairness pass after only three
+  // seconds. That was enough to find a valid roster, but often not enough to
+  // balance weekend rest or shift rotation, so every option was reported as
+  // unfinished. Give the optimization pass a useful budget while keeping the
+  // worker/API timeout below its existing 55-second ceiling.
+  const finalTimeLimit = quickAlternativeSearch ? 22 : 25
+  const mipGap = quickAlternativeSearch ? 0.05 : 0.02
   const weightedRuleViolations = ruleViolationSlacks.map(({ priorityKey, ...item }) => ({ ...item, coef: 10_000 * priorityFactor(rules, priorityKey ?? 'employeeRules') }))
   const priorityRanked = (items, ruleKey, baseWeight) => items.map(item => ({ ...item, coef: baseWeight * priorityFactor(rules, ruleKey) }))
   const enforceTopPriority = (items, ruleKey) => {
