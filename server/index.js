@@ -999,9 +999,13 @@ app.post('/api/shifts/options', requireAdmin, async (req, res, next) => {
     }
     const bestEffort = options.length === 0 && bestEffortOptions.length > 0
     if (bestEffort) {
-      bestEffortOptions.sort((a, b) => a.issues.length - b.issues.length || a.warnings.length - b.warnings.length || Number(b.optimal) - Number(a.optimal))
+      bestEffortOptions.sort((a, b) => a.issues.length - b.issues.length || Number(b.optimal) - Number(a.optimal) || a.warnings.length - b.warnings.length)
       options.push(...bestEffortOptions.slice(0, 3).map((option, index) => ({ ...option, id: index + 1 })))
     }
+    // Recommend the strongest candidate first so the default selection is the
+    // most complete plan, not merely the first seed that happened to solve.
+    options.sort((a, b) => a.issues.length - b.issues.length || Number(b.optimal) - Number(a.optimal) || a.warnings.length - b.warnings.length)
+    options.forEach((option, index) => { option.id = index + 1 })
     const explored = results.length
     const plannerError = results.find(attempt => attempt.status === 'fulfilled' && attempt.value.error)?.value.error
     if (!options.length && plannerError) return res.status(422).json({ error: plannerError })

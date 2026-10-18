@@ -30,6 +30,9 @@ export function SchedulePage({ app }: { app: AppState }) {
           <button className="btn btn-primary" disabled={generating || hasLockedShifts} title={hasLockedShifts ? '고정된 입력이 있어 빈칸 채우기만 사용할 수 있습니다.' : undefined} onClick={() => void generate()}>
             <Icon name="spark" size={16}/>{generating ? '편성 중…' : '전체 자동 편성'}
           </button>
+          <button className="btn" disabled={generating} onClick={() => void generate(hasLockedShifts ? 'rebalance' : 'replace', true)}>
+            {hasLockedShifts ? '추천안 바로 재편성' : '추천안 바로 적용'}
+          </button>
           <details className="menu">
             <summary className="btn btn-ghost" aria-label="더보기">더보기 <span aria-hidden="true">▾</span></summary>
             <div className="menu-list" role="menu">

@@ -234,7 +234,7 @@ export function useApp() {
     try { setSettings(await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(value) })); await load(); toast('근무 설정을 저장했습니다.') }
     catch (e) { setError(e instanceof Error ? e.message : '설정을 저장하지 못했습니다.') }
   }
-  const generate = async (mode: 'replace' | 'fill' | 'rebalance' = 'replace') => {
+  const generate = async (mode: 'replace' | 'fill' | 'rebalance' = 'replace', autoApplyRecommended = false) => {
     if (mode === 'replace' && hasLockedShifts) { setError(`${monthKey(month)}은 입력 근무가 확정되어 있어 전체 자동 편성을 할 수 없습니다. 빈칸 채우기를 사용해 주세요.`); return }
     const selectedMonthKey = monthKey(month)
     const currentMonthKey = todayKey.slice(0, 7)
@@ -243,14 +243,17 @@ export function useApp() {
       : selectedMonthKey === currentMonthKey
         ? `${todayKey}까지 지난 날짜는 유지하고, 이후 배정만 교체합니다.`
         : `${monthLabel(month)}은 지난 달이라 기존 배정은 모두 유지됩니다.`
-    if (mode === 'replace' && !window.confirm(`${monthLabel(month)} 근무표를 새로 편성할까요? ${replacementScope}`)) return
-    if (mode === 'rebalance' && !window.confirm(`직접 입력해 고정한 근무와 ${todayKey}까지 지난 날짜는 유지하고, 이후 미고정 배정만 다시 편성합니다. 평일 ${settings.operations.weekdayTarget}명·주말 및 공휴일 ${settings.operations.weekendTarget}명을 목표로 하며, 최소 인원 기준은 각각 ${settings.operations.weekdayMinimum}명·${settings.operations.weekendMinimum}명입니다.`)) return
+    if (mode === 'replace' && !window.confirm(`${monthLabel(month)} 근무표를 새로 편성할까요?${autoApplyRecommended ? ' 추천안을 바로 적용합니다.' : ''} ${replacementScope}`)) return
+    if (mode === 'rebalance' && !window.confirm(`직접 입력해 고정한 근무와 ${todayKey}까지 지난 날짜는 유지하고, 이후 미고정 배정만 다시 편성합니다.${autoApplyRecommended ? ' 추천안을 바로 적용합니다.' : ''} 평일 ${settings.operations.weekdayTarget}명·주말 및 공휴일 ${settings.operations.weekendTarget}명을 목표로 하며, 최소 인원 기준은 각각 ${settings.operations.weekdayMinimum}명·${settings.operations.weekendMinimum}명입니다.`)) return
     setGenerating(true); setError('')
     try {
       const monthValue = monthKey(month)
       const result = await api<{ month: string; mode: 'replace' | 'fill' | 'rebalance'; targetRestDays: number; options: ScheduleOption[]; bestEffort: boolean; exhaustive: false; explored: number; nextOffset: number; revision: number }>('/api/shifts/options', { method: 'POST', body: JSON.stringify({ month: monthValue, mode, offset: 0 }) })
-      setScheduleOptions(result)
-      setSelectedOptionId(result.options[0]?.id ?? null)
+      if (autoApplyRecommended && result.options[0]) await applyScheduleOption(result.options[0], result, true)
+      else {
+        setScheduleOptions(result)
+        setSelectedOptionId(result.options[0]?.id ?? null)
+      }
     } catch (e) { setError(e instanceof Error ? e.message : '자동 편성 결과를 만들지 못했습니다.') } finally { setGenerating(false) }
   }
   const findMoreOptions = async () => {
@@ -267,15 +270,19 @@ export function useApp() {
       })
     } catch (e) { setError(e instanceof Error ? e.message : '추가 대안을 찾지 못했습니다.') } finally { setGenerating(false) }
   }
-  const applyScheduleOption = async (option: ScheduleOption) => {
+  const applyScheduleOption = async (option: ScheduleOption, source = scheduleOptions, confirmWarnings = false) => {
     const hasIssues = option.issues.length > 0
     if (hasIssues) {
       const examples = option.issues.slice(0, 5).join('\n')
       const more = option.issues.length > 5 ? `\n외 ${option.issues.length - 5}건` : ''
       if (!window.confirm(`필수 운영 규칙을 모두 만족한 안을 찾지 못했습니다.\n\n선택한 안의 위반 ${option.issues.length}건을 확인하고 적용할까요?\n${examples}${more}`)) return
+    } else if (confirmWarnings && option.warnings.length) {
+      const examples = option.warnings.slice(0, 5).join('\n')
+      const more = option.warnings.length > 5 ? `\n외 ${option.warnings.length - 5}건` : ''
+      if (!window.confirm(`추천안에 확인할 항목 ${option.warnings.length}건이 있습니다.\n\n${examples}${more}\n\n그래도 적용할까요?`)) return
     }
     try {
-      await api('/api/shifts/apply-option', { method: 'POST', body: JSON.stringify({ month: scheduleOptions?.month, mode: scheduleOptions?.mode, shifts: option.shifts, revision: scheduleOptions?.revision, confirmIssues: hasIssues }) })
+      await api('/api/shifts/apply-option', { method: 'POST', body: JSON.stringify({ month: source?.month, mode: source?.mode, shifts: option.shifts, revision: source?.revision, confirmIssues: hasIssues }) })
       setScheduleOptions(null); await load()
       if (hasIssues) setError(`규칙 위반 ${option.issues.length}건을 포함한 편성안을 적용했습니다. 근무표의 확인 항목을 검토해 주세요.`)
       else if (option.warnings.length) setError(`선택한 편성안을 적용했습니다. 확인할 조건: ${option.warnings.slice(0, 6).join(' · ')}${option.warnings.length > 6 ? ` 외 ${option.warnings.length - 6}건` : ''}`)

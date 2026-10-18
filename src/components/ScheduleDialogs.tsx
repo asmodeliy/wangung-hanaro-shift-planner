@@ -15,7 +15,7 @@ export function OptionsDialog({ app }: { app: AppState }) {
       <button className="btn" disabled={generating || scheduleOptions.nextOffset >= 100000} onClick={() => void findMoreOptions()}>{generating ? '탐색 중…' : '다른 대안 더 찾기'}</button>
       <span className="spacer"/>
       <button className="btn" onClick={close}>취소</button>
-      <button className="btn btn-primary" disabled={!selectedOption || generating} onClick={() => selectedOption && void applyScheduleOption(selectedOption)}>{selectedOption?.issues.length ? '위반 포함 적용' : '선택한 안 적용'}</button>
+      <button className="btn btn-primary" disabled={!selectedOption || generating} onClick={() => selectedOption && void applyScheduleOption(selectedOption)}>{selectedOption?.issues.length ? '위반 포함 적용' : selectedOption?.id === 1 ? '추천안 적용' : '선택한 안 적용'}</button>
     </>}>
     {scheduleOptions.bestEffort
       ? <div className="alert alert-error" role="alert"><p>모든 필수 규칙을 만족하는 안을 찾지 못해 위반이 가장 적은 편성안을 표시합니다. 적용하면 위반 항목도 저장되므로 내용을 확인해 주세요.</p></div>
@@ -23,7 +23,7 @@ export function OptionsDialog({ app }: { app: AppState }) {
     <div className="options">
       <ul className="option-list">{scheduleOptions.options.map(option => <li key={option.id}>
         <button type="button" className={selectedOption?.id === option.id ? 'is-selected' : ''} onClick={() => setSelectedOptionId(option.id)}>
-          <b>대안 {option.id}</b>
+          <b>대안 {option.id} {option.id === 1 && <span className="option-recommended">{scheduleOptions.bestEffort ? '최선안' : '추천'}</span>}</b>
           <small>{option.issues.length ? `필수 규칙 미충족 ${option.issues.length}건` : option.warnings.length ? `확인 항목 ${option.warnings.length}건` : '운영 기준 충족'}</small>
           {option.issues.slice(0, 3).map((issue, index) => <small className="is-warn" key={`issue-${index}-${issue}`}>{issue}</small>)}
           {option.issues.length > 3 && <small className="is-warn">위반 항목 외 {option.issues.length - 3}건</small>}
