@@ -2,7 +2,7 @@ import GLPK from 'glpk.js/node'
 
 export const codes = ['open', 'close', 'full', 'off']
 export const defaultRules = { allowedShifts: ['open', 'close'], offRules: [] }
-export const defaultRulePriorities = { consecutiveClose: 1, fullCloseAdjacent: 2, daysOffPairs: 3, minimumStaffing: 4, regularCoverage: 5, weekendRegularFullShift: 6, monthlyRest: 7, employeeRules: 8, produceOpening: 9, produceCoverage: 4, functionalMinimum: 10, supportRestLimit: 11, approvedRequests: 12, pendingRequests: 13, maxConsecutiveWork: 14, weeklyRestBalance: 15, weekendRestFairness: 16, shiftRotation: 17, openCloseBalance: 18, fullShiftGeneration: 19 }
+export const defaultRulePriorities = { consecutiveClose: 1, fullCloseAdjacent: 2, daysOffPairs: 3, minimumStaffing: 4, regularCoverage: 5, weekendRegularFullShift: 6, monthlyRest: 7, employeeRules: 8, produceOpening: 9, produceCoverage: 3, functionalMinimum: 10, supportRestLimit: 11, approvedRequests: 12, pendingRequests: 13, maxConsecutiveWork: 14, weeklyRestBalance: 15, weekendRestFairness: 16, shiftRotation: 17, openCloseBalance: 18, fullShiftGeneration: 19 }
 export const defaultOperationRules = {
   minimumEmployeesForGeneration: 3,
   monthlyRestMode: 'weekendHolidayCount', monthlyRestDays: 8,
@@ -598,7 +598,8 @@ export async function generateSchedule(input) {
       lo([...produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')]), { name: shortage, coef: 1 }], rules.produceOpenCount)
       ruleViolationSlacks.push({ name: shortage, coef: 1, priorityKey: 'produceOpening' })
     }
-    if (rules.preventSimultaneousProduceRest && agriculturalEmployees.length > 1) {
+    const allAgriculturalStaffPinnedOff = agriculturalEmployees.length > 1 && agriculturalEmployees.every(employee => fixed.get(`${employee.id}:${date}`) === 'off')
+    if (rules.preventSimultaneousProduceRest && agriculturalEmployees.length > 1 && !allAgriculturalStaffPinnedOff) {
       const shortage = `produce_simultaneous_off_${dayKey}`
       lp.bounds.push({ name: shortage, type: glpk.GLP_LO, lb: 0, ub: 0 })
       const produceWork = agriculturalEmployees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code)))
