@@ -1079,7 +1079,7 @@ app.post('/api/shifts/generate', requireAdmin, async (req, res, next) => {
     const result = await new Promise((resolve, reject) => {
       let received = false
       const worker = new Worker(new URL('./planner-worker.js', import.meta.url), { workerData: input })
-      const timer = setTimeout(() => { void worker.terminate(); reject(new Error('자동편성 시간이 초과되었습니다. 조건을 확인해 주세요.')) }, 30000)
+      const timer = setTimeout(() => { void worker.terminate(); reject(new Error('자동편성 시간이 초과되었습니다. 조건을 확인해 주세요.')) }, 55000)
       worker.once('message', value => { received = true; clearTimeout(timer); resolve(value) })
       worker.once('error', error => { clearTimeout(timer); reject(error) })
       worker.once('exit', code => { clearTimeout(timer); if (!received || code !== 0) reject(new Error('자동편성 작업이 종료되었습니다.')) })

@@ -1,0 +1,639 @@
+{
+  "month": "2026-11",
+  "employees": [
+    {
+      "id": 1,
+      "name": "직원1",
+      "employmentType": "정규직",
+      "dutyType": "functional",
+      "produceQualified": 0,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 2,
+      "name": "직원2",
+      "employmentType": "정규직",
+      "dutyType": "functional",
+      "produceQualified": 1,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 3,
+      "name": "직원3",
+      "employmentType": "정규직",
+      "dutyType": "functional",
+      "produceQualified": 0,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 5,
+      "name": "직원4",
+      "employmentType": "계약직",
+      "dutyType": "support",
+      "produceQualified": 0,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 4,
+      "name": "직원5",
+      "employmentType": "계약직",
+      "dutyType": "support",
+      "produceQualified": 0,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 6,
+      "name": "직원6",
+      "employmentType": "계약직",
+      "dutyType": "support",
+      "produceQualified": 0,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    },
+    {
+      "id": 7,
+      "name": "직원7",
+      "employmentType": "계약직",
+      "dutyType": "support",
+      "produceQualified": 1,
+      "produceBackup": 0,
+      "workRules": {
+        "allowedShifts": [
+          "open",
+          "close"
+        ],
+        "offRules": []
+      }
+    }
+  ],
+  "settings": {
+    "shiftTimes": {
+      "open": {
+        "regular": {
+          "start": "08:00",
+          "end": "17:00"
+        },
+        "contract": {
+          "start": "08:30",
+          "end": "17:30"
+        }
+      },
+      "close": {
+        "regular": {
+          "start": "11:00",
+          "end": "20:00"
+        },
+        "contract": {
+          "start": "11:00",
+          "end": "20:00"
+        }
+      },
+      "produceOpen": {
+        "start": "08:00",
+        "end": "17:00"
+      }
+    },
+    "daysOffPairs": [
+      {
+        "employeeIds": [
+          2,
+          7
+        ]
+      }
+    ],
+    "additionalHolidays": [],
+    "produceOpenExceptions": [],
+    "editablePastShiftDates": [],
+    "confirmedMonths": [],
+    "operations": {
+      "minimumEmployeesForGeneration": 4,
+      "monthlyRestMode": "weekendHolidayCount",
+      "monthlyRestDays": 8,
+      "weekdayTarget": 5,
+      "weekendTarget": 4,
+      "weekdayMinimum": 4,
+      "weekendMinimum": 3,
+      "staffingMode": "employmentType",
+      "weekdayRegularTarget": 2,
+      "weekdayRegularMinimum": 2,
+      "weekdayContractTarget": 3,
+      "weekdayContractMinimum": 2,
+      "weekendRegularTarget": 2,
+      "weekendRegularMinimum": 1,
+      "weekendContractTarget": 2,
+      "weekendContractMinimum": 2,
+      "functionalMinOnDuty": 2,
+      "supportMaxOff": 2,
+      "produceOpenCount": 1,
+      "requireRegularEachShift": true,
+      "weekendRegularFullShift": true,
+      "requireProduceOpener": true,
+      "preventSimultaneousProduceRest": true,
+      "noConsecutiveClose": true,
+      "noFullCloseAdjacent": true,
+      "maxConsecutiveWorkDays": 0,
+      "maxWishDaysPerEmployee": 0,
+      "supportMaxRequestsPerDate": 2,
+      "requestDueDay": 15,
+      "publishDay": 20,
+      "allowFullShiftGeneration": true,
+      "approvedWishWeight": 3,
+      "pendingWishWeight": 1,
+      "weeklyRestBalanceWeight": 100,
+      "weekendRestFairnessWeight": 100,
+      "shiftRotationWeight": 100,
+      "openCloseBalanceWeight": 100,
+      "rulePriorities": {
+        "consecutiveClose": 1,
+        "fullCloseAdjacent": 2,
+        "daysOffPairs": 3,
+        "minimumStaffing": 4,
+        "regularCoverage": 1,
+        "weekendRegularFullShift": 6,
+        "monthlyRest": 7,
+        "employeeRules": 8,
+        "produceOpening": 9,
+        "produceCoverage": 3,
+        "functionalMinimum": 10,
+        "supportRestLimit": 11,
+        "approvedRequests": 12,
+        "pendingRequests": 13,
+        "maxConsecutiveWork": 14,
+        "weeklyRestBalance": 15,
+        "weekendRestFairness": 16,
+        "shiftRotation": 17,
+        "openCloseBalance": 18,
+        "fullShiftGeneration": 19
+      }
+    },
+    "weeklyRestPolicy": "minimum"
+  },
+  "holidays": [
+    {
+      "date": "2026-01-01",
+      "name": "신정"
+    },
+    {
+      "date": "2026-02-17",
+      "name": "설날"
+    },
+    {
+      "date": "2026-03-01",
+      "name": "3·1절"
+    },
+    {
+      "date": "2026-03-02",
+      "name": "3·1절 (대체공휴일)"
+    },
+    {
+      "date": "2026-05-05",
+      "name": "어린이날"
+    },
+    {
+      "date": "2026-05-24",
+      "name": "석가탄신일"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "석가탄신일 (대체공휴일)"
+    },
+    {
+      "date": "2026-06-06",
+      "name": "현충일"
+    },
+    {
+      "date": "2026-07-17",
+      "name": "제헌절"
+    },
+    {
+      "date": "2026-08-15",
+      "name": "광복절"
+    },
+    {
+      "date": "2026-08-17",
+      "name": "광복절 (대체공휴일)"
+    },
+    {
+      "date": "2026-09-24",
+      "name": "추석"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "개천절"
+    },
+    {
+      "date": "2026-10-05",
+      "name": "개천절 (대체공휴일)"
+    },
+    {
+      "date": "2026-10-09",
+      "name": "한글날"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "기독탄신일"
+    }
+  ],
+  "adjacentHolidays": [
+    {
+      "date": "2026-10-03",
+      "name": "개천절"
+    },
+    {
+      "date": "2026-10-05",
+      "name": "개천절 (대체공휴일)"
+    },
+    {
+      "date": "2026-10-09",
+      "name": "한글날"
+    }
+  ],
+  "existingShifts": [
+    {
+      "employeeId": 2,
+      "date": "2026-11-09",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 1,
+      "date": "2026-11-13",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-19",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-07",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-21",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-22",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-03",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-14",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-28",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-12",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-15",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-28",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-08",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-07",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-20",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-22",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 5,
+      "date": "2026-11-25",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-08",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-03",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-01",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-06",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 1,
+      "date": "2026-11-14",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-17",
+      "code": "off",
+      "locked": 1
+    }
+  ],
+  "adjacentShifts": [
+    {
+      "employeeId": 1,
+      "date": "2026-12-01",
+      "code": "off",
+      "locked": 0
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-12-01",
+      "code": "open",
+      "locked": 0
+    },
+    {
+      "employeeId": 3,
+      "date": "2026-12-01",
+      "code": "close",
+      "locked": 0
+    },
+    {
+      "employeeId": 5,
+      "date": "2026-12-01",
+      "code": "close",
+      "locked": 0
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-12-01",
+      "code": "open",
+      "locked": 0
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-10-31",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 3,
+      "date": "2026-10-31",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 1,
+      "date": "2026-10-31",
+      "code": "full",
+      "locked": 1
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-10-31",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-10-31",
+      "code": "close",
+      "locked": 1
+    },
+    {
+      "employeeId": 5,
+      "date": "2026-10-31",
+      "code": "off",
+      "locked": 1
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-10-31",
+      "code": "open",
+      "locked": 1
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-12-01",
+      "code": "open",
+      "locked": 0
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-12-01",
+      "code": "off",
+      "locked": 0
+    }
+  ],
+  "requests": [
+    {
+      "employeeId": 2,
+      "date": "2026-11-01",
+      "status": "approved"
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-03",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-03",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-06",
+      "status": "approved"
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-07",
+      "status": "approved"
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-07",
+      "status": "approved"
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-08",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-08",
+      "status": "approved"
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-09",
+      "status": "approved"
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-12",
+      "status": "approved"
+    },
+    {
+      "employeeId": 1,
+      "date": "2026-11-13",
+      "status": "approved"
+    },
+    {
+      "employeeId": 1,
+      "date": "2026-11-14",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-14",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-17",
+      "status": "approved"
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-15",
+      "status": "approved"
+    },
+    {
+      "employeeId": 2,
+      "date": "2026-11-19",
+      "status": "approved"
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-21",
+      "status": "approved"
+    },
+    {
+      "employeeId": 4,
+      "date": "2026-11-22",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-20",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-22",
+      "status": "approved"
+    },
+    {
+      "employeeId": 7,
+      "date": "2026-11-28",
+      "status": "approved"
+    },
+    {
+      "employeeId": 5,
+      "date": "2026-11-25",
+      "status": "approved"
+    },
+    {
+      "employeeId": 6,
+      "date": "2026-11-28",
+      "status": "approved"
+    }
+  ],
+  "lockedThroughDate": "2026-10-18",
+  "mode": "rebalance",
+  "seed": 7717,
+  "alternativeSearch": true
+}

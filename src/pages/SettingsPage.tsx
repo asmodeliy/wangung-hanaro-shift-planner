@@ -40,7 +40,7 @@ const priorityRows: { key: RulePriorityKey; title: string; status: (operations: 
   { key: 'daysOffPairs', title: '동시 휴무 제한', status: (_o, s) => s.daysOffPairs.length ? `켜짐 · ${s.daysOffPairs.length}쌍` : '꺼짐', detail: () => '지정한 직원 조합은 같은 날 휴무 금지' },
   { key: 'produceOpening', title: '농산 담당 오픈', status: o => o.requireProduceOpener || o.produceOpenCount > 0 ? '켜짐' : '꺼짐', detail: o => o.requireProduceOpener ? `담당자·대직자 중 1명${o.produceOpenCount ? ` · 담당 최소 ${o.produceOpenCount}명` : ''}` : `담당 오픈 최소 ${o.produceOpenCount}명` },
   { key: 'produceCoverage', title: '농산 담당·대직자 동시 휴무 제한', status: o => o.preventSimultaneousProduceRest ? '켜짐' : '꺼짐', detail: () => '농산 담당·대직자가 2명 이상일 때 매일 1명 이상 출근' },
-  { key: 'functionalMinimum', title: '일반직 최소 출근', status: o => o.functionalMinOnDuty > 0 ? '켜짐' : '꺼짐', detail: o => `하루 ${o.functionalMinOnDuty}명` },
+  { key: 'functionalMinimum', title: '일반직 최소 출근', status: o => o.functionalMinOnDuty > 0 ? '켜짐' : '꺼짐', detail: o => `하루 ${o.functionalMinOnDuty}명 · 종일근무 시 충족` },
   { key: 'supportRestLimit', title: '계약직 동시 휴무 상한', status: (o, _s, _count, contracts) => contracts > 0 && o.supportMaxOff < contracts ? '켜짐' : '꺼짐', detail: o => `하루 최대 ${o.supportMaxOff}명 휴무` },
   { key: 'approvedRequests', title: '승인 희망휴무', status: o => o.approvedWishWeight > 0 ? '켜짐' : '꺼짐', detail: o => `선호 점수 ${o.approvedWishWeight}` },
   { key: 'pendingRequests', title: '대기 희망휴무', status: o => o.pendingWishWeight > 0 ? '켜짐' : '꺼짐', detail: o => `선호 점수 ${o.pendingWishWeight}` },
@@ -169,7 +169,7 @@ export function SettingsPage({ app }: { app: AppState }) {
 
       <section className="panel pad rule-priority-panel settings-card-priority">
         <h2>자동 편성 룰 현황·우선순위</h2>
-        <p className="muted small">숫자가 작을수록 더 우선합니다. 켜진 제약 룰은 1~3순위에서 필수로 고정하고, 4~19순위는 다른 조건과 충돌할 때 점수로 비교합니다. 희망휴무와 형평성은 순위에 따라 선호 점수가 달라집니다. 기준 휴무보다 많이 배정되는 것은 이미 고정된 휴무가 기준을 넘은 경우에만 허용됩니다. 지키지 못한 룰은 후보의 확인 항목에 표시합니다.</p>
+        <p className="muted small">먼저 켜진 규칙과 목표 인원을 모두 충족하는 편성안을 찾습니다. 조건이 충돌하면 숫자가 작을수록 더 우선합니다. 켜진 제약 룰은 1~3순위에서 필수로 고정하고, 4~19순위는 다른 조건과 충돌할 때 점수로 비교합니다. 희망휴무와 형평성은 순위에 따라 선호 점수가 달라집니다. 기준 휴무보다 많이 배정되는 것은 이미 고정된 휴무가 기준을 넘은 경우에만 허용됩니다. 지키지 못한 룰은 후보의 확인 항목에 표시합니다.</p>
         <div className="rule-matrix-wrap"><table className="rule-matrix">
           <thead><tr><th scope="col">자동 편성 룰</th><th scope="col">상태</th><th scope="col">현재 설정</th><th scope="col">우선순위</th></tr></thead>
           <tbody>{sortedPriorityRows.map(row => <tr key={row.key}>
