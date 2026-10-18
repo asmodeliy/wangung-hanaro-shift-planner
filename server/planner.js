@@ -114,6 +114,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
   const supportEmployees = employees.filter(employee => employee.dutyType === 'support')
   const produceEmployees = employees.filter(employee => employee.produceQualified)
   const produceBackups = employees.filter(employee => employee.produceBackup)
+  const agriculturalEmployees = employees.filter(employee => employee.produceQualified || employee.produceBackup)
   for (const date of dates) {
     const workingCount = employees.filter(e => works(entries.get(`${e.id}:${date}`))).length
     const fallback = fallbackMinimumWorkersForDate(date, holidays, settings.operations)
@@ -149,7 +150,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
       }
     }
     for (const pair of settings.daysOffPairs ?? []) if (pair.employeeIds.every(id => employees.some(e => e.id === id)) && pair.employeeIds.every(id => entries.get(`${id}:${date}`) === 'off')) issues.push({ date, text: `${date} 동시휴무 제한 위반` })
-    if (rules.preventSimultaneousProduceRest && produceEmployees.length > 1 && produceEmployees.every(employee => !works(entries.get(`${employee.id}:${date}`)))) issues.push({ date, text: `${date} 농산 담당자 동시 휴무` })
+    if (rules.preventSimultaneousProduceRest && agriculturalEmployees.length > 1 && agriculturalEmployees.every(employee => !works(entries.get(`${employee.id}:${date}`)))) issues.push({ date, text: `${date} 농산 담당·대직자 동시 휴무` })
     const functionalOn = functionalEmployees.filter(employee => works(entries.get(`${employee.id}:${date}`))).length
     const supportOff = supportEmployees.filter(employee => entries.get(`${employee.id}:${date}`) === 'off').length
     const produceOpen = produceEmployees.filter(employee => covers(entries.get(`${employee.id}:${date}`), 'open')).length
@@ -220,6 +221,7 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
   const operations = operationRules(settings)
   const produceEmployees = employees.filter(employee => employee.produceQualified)
   const produceBackups = employees.filter(employee => employee.produceBackup)
+  const agriculturalEmployees = employees.filter(employee => employee.produceQualified || employee.produceBackup)
   const fixed = new Map(existingShifts.filter(s => mode === 'fill' || s.date <= lockedThroughDate || (mode === 'rebalance' && s.locked)).map(s => [`${s.employeeId}:${s.date}`, s.code]))
   const cells = new Map()
   for (const employee of employees) for (const date of dates) {
@@ -237,7 +239,7 @@ function fallbackAssignments({ month, employees, settings, holidays, existingShi
     let count = dates.filter(date => cells.get(`${employee.id}:${date}`) === 'off').length
     while (count < target) {
       const candidates = dates.filter(date => !fixed.has(`${employee.id}:${date}`) && cells.get(`${employee.id}:${date}`) !== 'off' && !isRequiredOff(employee, date)
-        && !(operations.preventSimultaneousProduceRest && produceEmployees.length > 1 && employee.produceQualified && produceEmployees.filter(produce => produce.id !== employee.id).every(produce => cells.get(`${produce.id}:${date}`) === 'off'))
+        && !(operations.preventSimultaneousProduceRest && agriculturalEmployees.length > 1 && (employee.produceQualified || employee.produceBackup) && agriculturalEmployees.filter(produce => produce.id !== employee.id).every(produce => cells.get(`${produce.id}:${date}`) === 'off'))
         && employees.length - dayOffCount(date) > fallbackMinimumWorkersForDate(date, holidays, settings?.operations))
       if (!candidates.length) break
       const tieBreak = new Map(candidates.map(date => [date, random()]))
@@ -313,6 +315,7 @@ export async function generateSchedule(input) {
   const supportEmployees = employees.filter(employee => employee.dutyType === 'support')
   const produceEmployees = employees.filter(employee => employee.produceQualified)
   const produceBackups = employees.filter(employee => employee.produceBackup)
+  const agriculturalEmployees = employees.filter(employee => employee.produceQualified || employee.produceBackup)
   if (!employees.length) return { error: '재직 중인 직원을 먼저 등록해 주세요.' }
   if (rules.minimumEmployeesForGeneration > 0 && employees.length < rules.minimumEmployeesForGeneration) return { error: `자동 편성에는 재직 직원 ${rules.minimumEmployeesForGeneration}명 이상이 필요합니다.` }
   const lp = { name: 'monthly_shifts', objective: { direction: glpk.GLP_MIN, name: 'preferences_and_balance', vars: [] }, subjectTo: [], binaries: [], bounds: [] }
@@ -595,10 +598,10 @@ export async function generateSchedule(input) {
       lo([...produceEmployees.flatMap(employee => [variable(employee.id, date, 'open'), variable(employee.id, date, 'full')]), { name: shortage, coef: 1 }], rules.produceOpenCount)
       ruleViolationSlacks.push({ name: shortage, coef: 1, priorityKey: 'produceOpening' })
     }
-    if (rules.preventSimultaneousProduceRest && produceEmployees.length > 1) {
+    if (rules.preventSimultaneousProduceRest && agriculturalEmployees.length > 1) {
       const shortage = `produce_simultaneous_off_${dayKey}`
       lp.bounds.push({ name: shortage, type: glpk.GLP_LO, lb: 0, ub: 0 })
-      const produceWork = produceEmployees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code)))
+      const produceWork = agriculturalEmployees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code)))
       lo([...produceWork, { name: shortage, coef: 1 }], 1)
       ruleViolationSlacks.push({ name: shortage, coef: 1, priorityKey: 'produceCoverage' })
     }

@@ -39,7 +39,7 @@ const priorityRows: { key: RulePriorityKey; title: string; status: (operations: 
   { key: 'employeeRules', title: '직원별 고정 휴무·가능 근무', status: (_o, _s, count) => count ? `켜짐 · 직원 ${count}명` : '꺼짐', detail: () => '직원별 근무 가능 유형과 반복 휴무' },
   { key: 'daysOffPairs', title: '동시 휴무 제한', status: (_o, s) => s.daysOffPairs.length ? `켜짐 · ${s.daysOffPairs.length}쌍` : '꺼짐', detail: () => '지정한 직원 조합은 같은 날 휴무 금지' },
   { key: 'produceOpening', title: '농산 담당 오픈', status: o => o.requireProduceOpener || o.produceOpenCount > 0 ? '켜짐' : '꺼짐', detail: o => o.requireProduceOpener ? `담당자·대직자 중 1명${o.produceOpenCount ? ` · 담당 최소 ${o.produceOpenCount}명` : ''}` : `담당 오픈 최소 ${o.produceOpenCount}명` },
-  { key: 'produceCoverage', title: '농산 담당 동시 휴무 제한', status: o => o.preventSimultaneousProduceRest ? '켜짐' : '꺼짐', detail: () => '농산 담당이 2명 이상일 때 매일 1명 이상 출근' },
+  { key: 'produceCoverage', title: '농산 담당·대직자 동시 휴무 제한', status: o => o.preventSimultaneousProduceRest ? '켜짐' : '꺼짐', detail: () => '농산 담당·대직자가 2명 이상일 때 매일 1명 이상 출근' },
   { key: 'functionalMinimum', title: '일반직 최소 출근', status: o => o.functionalMinOnDuty > 0 ? '켜짐' : '꺼짐', detail: o => `하루 ${o.functionalMinOnDuty}명` },
   { key: 'supportRestLimit', title: '계약직 동시 휴무 상한', status: (o, _s, _count, contracts) => contracts > 0 && o.supportMaxOff < contracts ? '켜짐' : '꺼짐', detail: o => `하루 최대 ${o.supportMaxOff}명 휴무` },
   { key: 'approvedRequests', title: '승인 희망휴무', status: o => o.approvedWishWeight > 0 ? '켜짐' : '꺼짐', detail: o => `선호 점수 ${o.approvedWishWeight}` },
@@ -162,7 +162,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <label className="check"><input type="checkbox" checked={ops.allowFullShiftGeneration} onChange={event => setOp('allowFullShiftGeneration', event.target.checked)}/><span>자동 편성에서 주말 종일근무 생성 허용 <small className="muted">정규직만 가능하며 한 주에 최대 1회입니다.</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.weekendRegularFullShift} onChange={event => setOp('weekendRegularFullShift', event.target.checked)}/><span>주말 종일근무 허용 <small className="muted">필수 배정은 아닙니다. 정규직만 가능하며 날짜별 최대 1명, 한 주에 한 번까지 배정합니다.</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.requireProduceOpener} onChange={event => setOp('requireProduceOpener', event.target.checked)}/><span>매일 농산 담당자 또는 대직자 오픈 배치</span></label>
-        <label className="check"><input type="checkbox" checked={ops.preventSimultaneousProduceRest} onChange={event => setOp('preventSimultaneousProduceRest', event.target.checked)}/><span>농산 담당자 동시 휴무 방지 <small className="muted">농산 담당자가 2명 이상일 때 한 명 이상 출근시킵니다.</small></span></label>
+        <label className="check"><input type="checkbox" checked={ops.preventSimultaneousProduceRest} onChange={event => setOp('preventSimultaneousProduceRest', event.target.checked)}/><span>농산 담당·대직자 동시 휴무 방지 <small className="muted">농산 담당·대직자가 2명 이상일 때 한 명 이상 출근시킵니다.</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.noConsecutiveClose} onChange={event => setOp('noConsecutiveClose', event.target.checked)}/><span>일반직은 마감을 이틀 연속 하지 않음 <small className="muted">마감 → 마감 금지</small></span></label>
         <label className="check"><input type="checkbox" checked={ops.noFullCloseAdjacent} onChange={event => setOp('noFullCloseAdjacent', event.target.checked)}/><span>일반직은 종일과 마감을 연달아 하지 않음 <small className="muted">종일 → 마감, 마감 → 종일 금지</small></span></label>
       </section>
