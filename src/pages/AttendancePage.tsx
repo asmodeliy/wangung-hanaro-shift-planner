@@ -185,7 +185,7 @@ export function AttendancePage() {
       </label>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
-      <p className="muted small attendance-note">파일을 올리면 등록된 근무표와 자동 비교합니다. 예정 퇴근보다 기준 이상 늦게 퇴근한 기록은 결과에 표시하고 개인별 기록부로 내려받을 수 있습니다. 오늘 출근 기록은 있지만 퇴근 기록이 없으면 ‘근무 중’으로 표시합니다.</p>
+      <p className="muted small attendance-note">파일을 선택한 다음 ‘근태 비교’를 누르면 결과가 저장됩니다. 새로고침 후에는 저장된 비교 이력에서 다시 열 수 있습니다. 기준 이상 늦게 퇴근한 기록은 개인별 시간외 기록부로 내려받을 수 있습니다.</p>
     </section>
 
     {result && <>
