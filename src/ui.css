@@ -142,6 +142,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 .attendance-file input { padding: 7px; }
 .attendance-grace { width: 180px; }
 .attendance-grace .unit input { width: 100px; }
+.attendance-overtime-threshold { width: 210px; }
+.attendance-overtime-threshold .unit input { width: 110px; }
 .attendance-submit { min-height: 38px; }
 .attendance-selected { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft, var(--green-soft)); }
 .attendance-selected span, .attendance-selected small { display: block; }

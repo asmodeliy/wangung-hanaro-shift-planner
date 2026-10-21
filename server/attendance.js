@@ -110,7 +110,7 @@ export function parseAttendanceWorkbook(buffer) {
 
 const minutesOfDay = time => time ? Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5)) : null
 
-export function compareAttendance({ report, employees, shifts, graceMinutes = 5, now = new Date() }) {
+export function compareAttendance({ report, employees, shifts, graceMinutes = 5, overtimeThresholdMinutes = 30, now = new Date() }) {
   const employeeByName = new Map()
   for (const employee of employees) {
     const key = normalizeAttendanceName(employee.name)
@@ -156,6 +156,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     let severity = 'ok'
     let lateMinutes = 0
     let earlyMinutes = 0
+    let overtimeMinutes = 0
     if (!shift) {
       status.push('근무표 미편성')
       severity = 'warning'
@@ -167,6 +168,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
       const expectedEndMinute = minutesOfDay(expectedEnd)
       const inMinute = minutesOfDay(actualStart)
       const outMinute = minutesOfDay(actualEnd)
+      if (outMinute !== null && expectedEndMinute !== null && outMinute > expectedEndMinute) overtimeMinutes = outMinute - expectedEndMinute
       if (inMinute === null) {
         if (date > today || (date === today && expectedStartMinute !== null && currentMinute < expectedStartMinute - graceMinutes)) {
           status.push('출근 예정')
@@ -194,6 +196,10 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
         severity = 'critical'
       }
       if (!status.length) status.push('정상')
+      if (overtimeMinutes >= overtimeThresholdMinutes && overtimeMinutes > 0) {
+        status.push(`초과근무 ${overtimeMinutes}분`)
+        if (severity === 'ok') severity = 'info'
+      }
     }
     rows.push({
       employeeId: employee?.id ?? null,
@@ -208,6 +214,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
       severity,
       lateMinutes,
       earlyMinutes,
+      overtimeMinutes,
     })
   }
   for (const date of dateKeys) for (const shift of shifts.filter(item => item.date === date)) {
@@ -228,6 +235,17 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     inProgress: rows.filter(row => row.status.includes('근무 중')).length,
     unexpectedWork: rows.filter(row => row.status.includes('휴무일 출근') || row.status.includes('근무표 미편성')).length,
     unmatched: unmatched.length,
+    overtime: rows.filter(row => row.overtimeMinutes >= overtimeThresholdMinutes && row.overtimeMinutes > 0).length,
+    overtimeMinutes: rows.filter(row => row.overtimeMinutes >= overtimeThresholdMinutes && row.overtimeMinutes > 0).reduce((total, row) => total + row.overtimeMinutes, 0),
   }
-  return { from: report.from, to: report.to, importedRows: report.importedRows, counts, rows, unmatched }
+  const overtime = rows.filter(row => row.overtimeMinutes >= overtimeThresholdMinutes && row.overtimeMinutes > 0).map(row => ({
+    employeeId: row.employeeId,
+    employeeName: row.employeeName,
+    date: row.date,
+    scheduledCode: row.scheduledCode,
+    expectedEnd: row.expectedEnd,
+    actualEnd: row.actualEnd,
+    minutes: row.overtimeMinutes,
+  }))
+  return { from: report.from, to: report.to, importedRows: report.importedRows, overtimeThresholdMinutes, counts, rows, overtime, unmatched }
 }
