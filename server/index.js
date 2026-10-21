@@ -10,6 +10,7 @@ import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
 import { compareAttendance, parseAttendanceWorkbook } from './attendance.js'
+import { createOvertimeWorkbook } from './overtime-export.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -407,6 +408,19 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
     })
     res.json(compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes }))
   } catch (error) { next(error) }
+})
+app.post('/api/attendance/overtime-sheet', requireAdmin, async (req, res) => {
+  try {
+    const workbook = await createOvertimeWorkbook(req.body ?? {})
+    const buffer = await workbook.xlsx.writeBuffer()
+    const from = req.body.from
+    const to = req.body.to
+    const filename = `시간외 근무 기록부_${from}_${to}.xlsx`
+    res.setHeader('Content-Disposition', `attachment; filename="overtime-record.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`)
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(Buffer.from(buffer))
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : '시간외 근무 기록부를 만들지 못했습니다.' })
+  }
 })
 app.get('/api/reference-schedule', requireAdmin, async (_req, res) => {
   const image = await db.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('file:reference-schedule.png')

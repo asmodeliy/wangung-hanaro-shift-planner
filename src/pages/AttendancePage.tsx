@@ -34,6 +34,7 @@ export function AttendancePage() {
   const [overtimeThresholdMinutes, setOvertimeThresholdMinutes] = useState(30)
   const [result, setResult] = useState<AttendanceResult | null>(null)
   const [busy, setBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<'all' | 'review'>('all')
   const [dateFilter, setDateFilter] = useState('all')
@@ -77,24 +78,32 @@ export function AttendancePage() {
   }
 
   const downloadOvertimeSheet = async () => {
-    if (!result?.overtime.length) return
-    const XLSX = await import('@e965/xlsx')
-    const rows: (string | number)[][] = [
-      ['시간외 근무 확인표'],
-      [`기간: ${result.from} ~ ${result.to}`],
-      [`작성 기준: 예정 퇴근 이후 ${result.overtimeThresholdMinutes}분 이상 (기준 미만 제외, 초과 시간은 분 단위로 기록)`],
-      [],
-      ['날짜', '직원명', '예정 근무', '예정 퇴근', '실제 퇴근', '초과근무(분)', '확인·비고'],
-      ...result.overtime.map(row => [row.date, row.employeeName, row.scheduledCode ? shiftNames[row.scheduledCode] : '근무표 없음', row.expectedEnd ?? '', row.actualEnd ?? '', row.minutes, '']),
-      [],
-      ['합계', '', '', '', '', result.counts.overtimeMinutes, '확인 후 결재'],
-    ]
-    const sheet = XLSX.utils.aoa_to_sheet(rows)
-    sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }]
-    sheet['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 15 }, { wch: 24 }]
-    const book = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(book, sheet, '시간외근무')
-    XLSX.writeFile(book, `시간외근무표_${result.from}_${result.to}.xlsx`)
+    if (!result?.overtime.length || exportBusy) return
+    setExportBusy(true)
+    setError('')
+    try {
+      const response = await fetch('/api/attendance/overtime-sheet', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: result.from, to: result.to, overtime: result.overtime }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null
+        throw new Error(body?.error || `시간외 근무 기록부를 만들지 못했습니다. (${response.status})`)
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `시간외 근무 기록부_${result.from}_${result.to}.xlsx`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '시간외 근무 기록부를 만들지 못했습니다.')
+    } finally {
+      setExportBusy(false)
+    }
   }
 
   return <>
@@ -135,7 +144,7 @@ export function AttendancePage() {
       <section className="panel attendance-results">
         <div className="section-head attendance-result-head">
           <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">근무표가 없는 날짜의 출근도 별도 확인 항목으로 표시합니다.</p></div>
-          {result.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" onClick={downloadOvertimeSheet}>시간외 근무표 엑셀 다운로드 ({result.overtime.length}건)</button>}
+          {result.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${result.overtime.length}건)`}</button>}
           <div className="attendance-filters">
             <label className="field">결과 보기<select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">전체 결과</option><option value="review">확인 필요</option></select></label>
             {dates.length > 1 && <label className="field">날짜<select value={dateFilter} onChange={event => setDateFilter(event.target.value)}><option value="all">전체 기간</option>{dates.map(date => <option key={date} value={date}>{dateLabel(date)}</option>)}</select></label>}
