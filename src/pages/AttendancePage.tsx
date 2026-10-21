@@ -30,9 +30,50 @@ type AttendanceResult = {
 
 const shiftNames: Record<NonNullable<AttendanceRow['scheduledCode']>, string> = { open: '오픈', close: '마감', full: '종일', off: '휴무' }
 const dateLabel = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })
+const pendingUploadKey = 'pending'
+
+function openPendingUploadDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('attendance-upload-cache', 1)
+    request.onupgradeneeded = () => request.result.createObjectStore('uploads')
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error ?? new Error('근태 파일 저장소를 열지 못했습니다.'))
+  })
+}
+
+async function storePendingUpload(file: File | null): Promise<void> {
+  const database = await openPendingUploadDb()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction('uploads', 'readwrite')
+    const store = transaction.objectStore('uploads')
+    if (!file) store.delete(pendingUploadKey)
+    else store.put({ name: file.name, type: file.type, lastModified: file.lastModified, blob: file }, pendingUploadKey)
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error ?? new Error('근태 파일을 저장하지 못했습니다.'))
+    transaction.onabort = () => reject(transaction.error ?? new Error('근태 파일 저장이 취소됐습니다.'))
+  }).finally(() => database.close())
+}
+
+async function readPendingUpload(): Promise<File | null> {
+  const database = await openPendingUploadDb()
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('uploads', 'readonly')
+    const request = transaction.objectStore('uploads').get(pendingUploadKey)
+    request.onsuccess = () => {
+      const saved = request.result as { name?: string; type?: string; lastModified?: number; blob?: Blob } | undefined
+      resolve(saved?.blob instanceof Blob && saved.name
+        ? new File([saved.blob], saved.name, { type: saved.type ?? '', lastModified: saved.lastModified ?? Date.now() })
+        : null)
+    }
+    request.onerror = () => reject(request.error ?? new Error('저장된 근태 파일을 읽지 못했습니다.'))
+    transaction.oncomplete = () => database.close()
+    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('저장된 근태 파일을 읽지 못했습니다.')) }
+  })
+}
 
 export function AttendancePage() {
   const [file, setFile] = useState<File | null>(null)
+  const [uploadSaved, setUploadSaved] = useState(false)
   const [graceMinutes, setGraceMinutes] = useState(5)
   const [overtimeThresholdMinutes, setOvertimeThresholdMinutes] = useState(30)
   const [result, setResult] = useState<AttendanceResult | null>(null)
@@ -78,6 +119,11 @@ export function AttendancePage() {
 
   useEffect(() => {
     let active = true
+    void readPendingUpload()
+      .then(savedFile => {
+        if (active && savedFile) { setFile(savedFile); setUploadSaved(true) }
+      })
+      .catch(() => { if (active) setError('이 브라우저에 저장한 근태 파일을 불러오지 못했습니다. 파일을 다시 선택해 주세요.') })
     void fetch('/api/attendance/reports', { credentials: 'same-origin' })
       .then(async response => {
         if (!response.ok) throw new Error('저장된 근태 이력을 불러오지 못했습니다.')
@@ -99,10 +145,19 @@ export function AttendancePage() {
 
   const chooseFile = (next: File | null) => {
     setError('')
-    if (!next) { setFile(null); return }
+    if (!next) {
+      setFile(null)
+      setUploadSaved(false)
+      void storePendingUpload(null).catch(() => setError('저장된 근태 파일을 지우지 못했습니다.'))
+      return
+    }
     if (!/\.xlsx?$/i.test(next.name)) { setFile(null); setError('.xls 또는 .xlsx 근태등록 파일을 선택해 주세요.'); return }
     if (next.size > 10 * 1024 * 1024) { setFile(null); setError('파일은 10MB 이하만 올릴 수 있습니다.'); return }
     setFile(next)
+    setUploadSaved(false)
+    void storePendingUpload(next)
+      .then(() => setUploadSaved(true))
+      .catch(() => setError('파일을 이 브라우저에 저장하지 못했습니다. 저장 공간을 확인하거나 다시 선택해 주세요.'))
   }
 
   const compare = async () => {
@@ -121,6 +176,8 @@ export function AttendancePage() {
       const comparison = body as AttendanceResult
       setResult(comparison)
       setDateFilter('all')
+      await storePendingUpload(null)
+      setUploadSaved(false)
       await loadSavedReport(comparison.reportId)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '근태 비교 중 오류가 발생했습니다.')
@@ -164,7 +221,7 @@ export function AttendancePage() {
     </header>
 
     <section className="panel pad attendance-upload">
-      <div className="section-head"><div><h2>근태 파일 비교</h2><p className="muted small">구형 엑셀 .xls와 .xlsx를 지원합니다. 최근 비교 이력 24개를 저장해 새로고침 후에도 다시 열 수 있습니다. 원본 파일은 저장하지 않습니다.</p></div></div>
+      <div className="section-head"><div><h2>근태 파일 비교</h2><p className="muted small">구형 엑셀 .xls와 .xlsx를 지원합니다. 선택한 파일은 이 브라우저에 임시 저장되고, 비교 결과는 서버에 최근 24개까지 저장됩니다.</p></div></div>
       <div className="attendance-controls">
         <label className="field attendance-file">근태등록 엑셀 파일
           <input type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.currentTarget.files?.[0] ?? null)}/>
@@ -177,7 +234,7 @@ export function AttendancePage() {
         </label>
         <button className="btn btn-primary attendance-submit" type="button" disabled={!file || busy} onClick={() => void compare()}>{busy ? '근무표와 비교 중…' : '근태 비교'}</button>
       </div>
-      {file && <div className="attendance-selected"><span><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)}KB</small></span><button type="button" className="btn btn-ghost btn-sm" onClick={() => chooseFile(null)}>파일 변경</button></div>}
+      {file && <div className="attendance-selected"><span><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)}KB{uploadSaved ? ' · 이 브라우저에 저장됨' : ''}</small></span><button type="button" className="btn btn-ghost btn-sm" onClick={() => chooseFile(null)}>파일 변경</button></div>}
       {reports.length > 0 && <label className="field attendance-history">저장된 비교 이력
         <select value={selectedReportId} onChange={event => { const id = event.target.value; setSelectedReportId(id); void loadSavedReport(id).catch(cause => setError(cause instanceof Error ? cause.message : '근태 이력을 불러오지 못했습니다.')) }}>
           {reports.map(report => <option key={report.id} value={report.id}>{report.fromDate} ~ {report.toDate} · {report.fileName} · {new Date(report.createdAt).toLocaleString('ko-KR')}</option>)}
@@ -185,7 +242,7 @@ export function AttendancePage() {
       </label>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
-      <p className="muted small attendance-note">파일을 선택한 다음 ‘근태 비교’를 누르면 결과가 저장됩니다. 새로고침 후에는 저장된 비교 이력에서 다시 열 수 있습니다. 기준 이상 늦게 퇴근한 기록은 개인별 시간외 기록부로 내려받을 수 있습니다.</p>
+      <p className="muted small attendance-note">선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. ‘근태 비교’를 누르면 결과가 저장되어 비교 이력에서 다시 열 수 있습니다. 기준 이상 늦게 퇴근한 기록은 개인별 시간외 기록부로 내려받을 수 있습니다.</p>
     </section>
 
     {result && <>
