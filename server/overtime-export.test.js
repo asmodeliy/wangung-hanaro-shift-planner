@@ -24,8 +24,8 @@ test('overtime workbook follows the time-out record form with a sheet per employ
   assert.equal(sheet.getCell('I3').value, '최창섭')
   assert.equal(sheet.getCell('E5').value, '사전결재')
   assert.equal(sheet.getCell('I5').value, '사후확인')
-  assert.deepEqual([sheet.getCell('A7').value, sheet.getCell('C7').value, sheet.getCell('D7').value, sheet.getCell('I7').value], ['2026-10-15', '17:00', '33분', '33분'])
-  assert.deepEqual([sheet.getCell('E7').value, sheet.getCell('F7').value, sheet.getCell('J7').value], ['', '', ''])
+  assert.deepEqual([sheet.getCell('A7').value, sheet.getCell('C7').value, sheet.getCell('D7').value], ['2026-10-15', '17:00', '33분'])
+  assert.deepEqual([sheet.getCell('E7').value, sheet.getCell('F7').value, sheet.getCell('I7').value, sheet.getCell('J7').value], ['', '', '', ''])
   assert.equal(sheet.pageSetup.orientation, 'portrait')
 })
 

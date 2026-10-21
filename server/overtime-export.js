@@ -106,7 +106,7 @@ export async function createOvertimeWorkbook({ from, to, overtime }) {
 
     employee.records.sort((a, b) => a.date.localeCompare(b.date))
     for (const record of employee.records) {
-      const row = sheet.addRow([record.date, '', record.expectedEnd ?? '', formatDuration(record.minutes), '', '', '', '', formatDuration(record.minutes), '', ''])
+      const row = sheet.addRow([record.date, '', record.expectedEnd ?? '', formatDuration(record.minutes), '', '', '', '', '', '', ''])
       row.height = 24
       row.eachCell({ includeEmpty: true }, cell => {
         cell.font = { name: '맑은 고딕', size: 9 }
