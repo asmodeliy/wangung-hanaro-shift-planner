@@ -35,9 +35,12 @@ function formatDuration(minutes) {
   return hours ? `${hours}시간 ${String(remainder).padStart(2, '0')}분` : `${remainder}분`
 }
 
-export async function createOvertimeWorkbook({ from, to, overtime }) {
+export async function createOvertimeWorkbook({ from, to, overtime, employeeId }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('기간 형식이 올바르지 않습니다.')
+  if (employeeId !== undefined && !Number.isInteger(employeeId)) throw new Error('직원 선택 값이 올바르지 않습니다.')
   if (!Array.isArray(overtime) || overtime.length < 1 || overtime.length > 500) throw new Error('시간외 근무 기록을 찾지 못했습니다.')
+  if (employeeId !== undefined) overtime = overtime.filter(record => record.employeeId === employeeId)
+  if (!overtime.length) throw new Error('선택한 직원의 시간외 근무 기록을 찾지 못했습니다.')
 
   const workbook = new ExcelJS.Workbook()
   workbook.creator = '왕궁농협 하나로마트 근태 모니터링'

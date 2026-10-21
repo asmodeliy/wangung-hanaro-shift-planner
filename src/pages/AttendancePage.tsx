@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type AttendanceRow = {
   employeeId: number | null
@@ -14,7 +14,10 @@ type AttendanceRow = {
   severity: 'ok' | 'info' | 'warning' | 'critical'
 }
 type OvertimeRow = { employeeId: number | null; employeeName: string; date: string; scheduledCode: AttendanceRow['scheduledCode']; expectedEnd: string | null; actualEnd: string | null; minutes: number }
+type SavedReport = { id: number; fileName: string; createdAt: string; fromDate: string; toDate: string; importedRows: number }
 type AttendanceResult = {
+  reportId?: number
+  fileName?: string
   from: string
   to: string
   importedRows: number
@@ -33,6 +36,9 @@ export function AttendancePage() {
   const [graceMinutes, setGraceMinutes] = useState(5)
   const [overtimeThresholdMinutes, setOvertimeThresholdMinutes] = useState(30)
   const [result, setResult] = useState<AttendanceResult | null>(null)
+  const [reports, setReports] = useState<SavedReport[]>([])
+  const [selectedReportId, setSelectedReportId] = useState('')
+  const [loadingSaved, setLoadingSaved] = useState(true)
   const [busy, setBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [error, setError] = useState('')
@@ -40,15 +46,59 @@ export function AttendancePage() {
   const [dateFilter, setDateFilter] = useState('all')
 
   const dates = useMemo(() => [...new Set(result?.rows.map(row => row.date) ?? [])], [result])
+  const overtimePeople = useMemo(() => {
+    const people = new Map<number, { employeeId: number; employeeName: string; count: number }>()
+    for (const row of result?.overtime ?? []) {
+      if (row.employeeId === null) continue
+      const person = people.get(row.employeeId) ?? { employeeId: row.employeeId, employeeName: row.employeeName, count: 0 }
+      person.count++
+      people.set(row.employeeId, person)
+    }
+    return [...people.values()]
+  }, [result])
   const visibleRows = useMemo(() => (result?.rows ?? []).filter(row =>
     (filter === 'all' || ['warning', 'critical'].includes(row.severity) || (row.overtimeMinutes > 0 && row.overtimeMinutes >= (result?.overtimeThresholdMinutes ?? 30)))
     && (dateFilter === 'all' || row.date === dateFilter),
   ), [result, filter, dateFilter])
 
+  const loadSavedReport = async (id?: number | string) => {
+    const listResponse = await fetch('/api/attendance/reports', { credentials: 'same-origin' })
+    if (!listResponse.ok) throw new Error('저장된 근태 이력을 불러오지 못했습니다.')
+    const savedReports = await listResponse.json() as SavedReport[]
+    setReports(savedReports)
+    const targetId = id ? String(id) : String(savedReports[0]?.id ?? '')
+    setSelectedReportId(targetId)
+    if (!targetId) { setResult(null); return }
+    const response = await fetch(`/api/attendance/reports/${targetId}`, { credentials: 'same-origin' })
+    if (!response.ok) throw new Error('선택한 근태 이력을 불러오지 못했습니다.')
+    const saved = await response.json() as { result: AttendanceResult }
+    setResult(saved.result)
+    setDateFilter('all')
+  }
+
+  useEffect(() => {
+    let active = true
+    void fetch('/api/attendance/reports', { credentials: 'same-origin' })
+      .then(async response => {
+        if (!response.ok) throw new Error('저장된 근태 이력을 불러오지 못했습니다.')
+        const savedReports = await response.json() as SavedReport[]
+        if (!active) return
+        setReports(savedReports)
+        const latestId = savedReports[0]?.id
+        if (!latestId) return
+        setSelectedReportId(String(latestId))
+        const latestResponse = await fetch(`/api/attendance/reports/${latestId}`, { credentials: 'same-origin' })
+        if (!latestResponse.ok) throw new Error('최근 근태 이력을 불러오지 못했습니다.')
+        const saved = await latestResponse.json() as { result: AttendanceResult }
+        if (active) setResult(saved.result)
+      })
+      .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : '저장된 근태 이력을 불러오지 못했습니다.') })
+      .finally(() => { if (active) setLoadingSaved(false) })
+    return () => { active = false }
+  }, [])
+
   const chooseFile = (next: File | null) => {
     setError('')
-    setResult(null)
-    setDateFilter('all')
     if (!next) { setFile(null); return }
     if (!/\.xlsx?$/i.test(next.name)) { setFile(null); setError('.xls 또는 .xlsx 근태등록 파일을 선택해 주세요.'); return }
     if (next.size > 10 * 1024 * 1024) { setFile(null); setError('파일은 10MB 이하만 올릴 수 있습니다.'); return }
@@ -59,17 +109,19 @@ export function AttendancePage() {
     if (!file || busy) return
     setBusy(true)
     setError('')
-    setResult(null)
     try {
       const response = await fetch(`/api/attendance/compare?graceMinutes=${graceMinutes}&overtimeThresholdMinutes=${overtimeThresholdMinutes}`, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
         body: file,
       })
       const body = await response.json().catch(() => null) as AttendanceResult | { error?: string } | null
       if (!response.ok) throw new Error(body && 'error' in body && body.error ? body.error : `근태 비교에 실패했습니다. (${response.status})`)
-      setResult(body as AttendanceResult)
+      const comparison = body as AttendanceResult
+      setResult(comparison)
+      setDateFilter('all')
+      await loadSavedReport(comparison.reportId)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '근태 비교 중 오류가 발생했습니다.')
     } finally {
@@ -77,7 +129,7 @@ export function AttendancePage() {
     }
   }
 
-  const downloadOvertimeSheet = async () => {
+  const downloadOvertimeSheet = async (employeeId?: number) => {
     if (!result?.overtime.length || exportBusy) return
     setExportBusy(true)
     setError('')
@@ -86,7 +138,7 @@ export function AttendancePage() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: result.from, to: result.to, overtime: result.overtime }),
+        body: JSON.stringify({ from: result.from, to: result.to, overtime: result.overtime, ...(employeeId === undefined ? {} : { employeeId }) }),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { error?: string } | null
@@ -112,7 +164,7 @@ export function AttendancePage() {
     </header>
 
     <section className="panel pad attendance-upload">
-      <div className="section-head"><div><h2>근태 파일 비교</h2><p className="muted small">구형 엑셀 .xls와 .xlsx를 지원합니다. 파일은 비교 처리 후 저장하지 않습니다.</p></div></div>
+      <div className="section-head"><div><h2>근태 파일 비교</h2><p className="muted small">구형 엑셀 .xls와 .xlsx를 지원합니다. 최근 비교 이력 24개를 저장해 새로고침 후에도 다시 열 수 있습니다. 원본 파일은 저장하지 않습니다.</p></div></div>
       <div className="attendance-controls">
         <label className="field attendance-file">근태등록 엑셀 파일
           <input type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.currentTarget.files?.[0] ?? null)}/>
@@ -126,8 +178,14 @@ export function AttendancePage() {
         <button className="btn btn-primary attendance-submit" type="button" disabled={!file || busy} onClick={() => void compare()}>{busy ? '근무표와 비교 중…' : '근태 비교'}</button>
       </div>
       {file && <div className="attendance-selected"><span><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)}KB</small></span><button type="button" className="btn btn-ghost btn-sm" onClick={() => chooseFile(null)}>파일 변경</button></div>}
+      {reports.length > 0 && <label className="field attendance-history">저장된 비교 이력
+        <select value={selectedReportId} onChange={event => { const id = event.target.value; setSelectedReportId(id); void loadSavedReport(id).catch(cause => setError(cause instanceof Error ? cause.message : '근태 이력을 불러오지 못했습니다.')) }}>
+          {reports.map(report => <option key={report.id} value={report.id}>{report.fromDate} ~ {report.toDate} · {report.fileName} · {new Date(report.createdAt).toLocaleString('ko-KR')}</option>)}
+        </select>
+      </label>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
-      <p className="muted small attendance-note">파일을 올리면 등록된 근무표와 자동 비교합니다. 예정 퇴근보다 기준 이상 늦게 퇴근한 기록은 결과에 표시하고 시간외 근무표 엑셀로 내려받을 수 있습니다. 오늘 출근 기록은 있지만 퇴근 기록이 없으면 ‘근무 중’으로 표시합니다.</p>
+      {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
+      <p className="muted small attendance-note">파일을 올리면 등록된 근무표와 자동 비교합니다. 예정 퇴근보다 기준 이상 늦게 퇴근한 기록은 결과에 표시하고 개인별 기록부로 내려받을 수 있습니다. 오늘 출근 기록은 있지만 퇴근 기록이 없으면 ‘근무 중’으로 표시합니다.</p>
     </section>
 
     {result && <>
@@ -160,6 +218,11 @@ export function AttendancePage() {
           </tr>)}</tbody>
         </table></div> : <p className="attendance-empty">{filter === 'review' ? '선택한 조건에 확인할 항목이 없습니다.' : '표시할 근태 비교 결과가 없습니다.'}</p>}
       </section>
+
+      {result.overtime.length > 0 && <section className="panel pad attendance-overtime-people">
+        <h2>개인별 시간외 근무 기록부</h2>
+        <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 기록부 다운로드</button></li>)}</ul>
+      </section>}
 
       {result.unmatched.length > 0 && <section className="panel pad attendance-unmatched">
         <h2>직원 이름 확인 <span className="count">{result.unmatched.length}</span></h2>

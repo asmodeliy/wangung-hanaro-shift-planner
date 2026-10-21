@@ -149,6 +149,14 @@ ul { margin: 0; padding: 0; list-style: none; }
 .attendance-selected span, .attendance-selected small { display: block; }
 .attendance-selected small { margin-top: 2px; color: var(--muted); font-size: 12px; }
 .attendance-note { margin: 0; }
+.attendance-history { max-width: 720px; }
+.attendance-history select { width: 100%; min-height: 36px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); }
+.attendance-overtime-people { display: grid; gap: 12px; }
+.attendance-overtime-people h2 { margin: 0; font-size: 16px; }
+.attendance-overtime-people ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.attendance-overtime-people li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.attendance-overtime-people li span, .attendance-overtime-people li small { display: block; }
+.attendance-overtime-people li small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .attendance-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .attendance-stat { display: grid; gap: 5px; min-width: 0; padding: 14px; }
 .attendance-stat > span { color: var(--muted); font-size: 12px; }

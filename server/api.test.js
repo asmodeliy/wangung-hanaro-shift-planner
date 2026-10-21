@@ -6,12 +6,17 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
+import * as XLSX from '@e965/xlsx'
 
 let child, folder, baseUrl, cookie
 const test = (name, fn) => nodeTest(name, { skip: !process.env.TEST_DATABASE_URL }, fn)
 const systemNode = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'node.exe') : process.execPath
 async function call(url, method = 'GET', body, auth = true) {
   const response = await fetch(baseUrl + url, { method, headers: { 'Content-Type': 'application/json', ...(auth && cookie ? { Cookie: cookie } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
+  return { status: response.status, data: response.status === 204 ? null : await response.json(), cookie: response.headers.getSetCookie().at(-1)?.split(';')[0] }
+}
+async function callRaw(url, method, body, headers = {}, auth = true) {
+  const response = await fetch(baseUrl + url, { method, headers: { ...(auth && cookie ? { Cookie: cookie } : {}), ...headers }, ...(method === 'GET' ? {} : { body }) })
   return { status: response.status, data: response.status === 204 ? null : await response.json(), cookie: response.headers.getSetCookie().at(-1)?.split(';')[0] }
 }
 before(async () => {
@@ -37,6 +42,25 @@ after(async () => {
 test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-02-30', code: 'off' })).status, 400)
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
+})
+test('attendance comparisons are saved and can be reopened after a page reload', async () => {
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['이름', '근무일자', '출근', '퇴근'],
+    ['테스트 직원1', '2026-10-21', '08:00', '17:45'],
+  ]), '근태')
+  const bytes = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+  const comparison = await callRaw('/api/attendance/compare?graceMinutes=5&overtimeThresholdMinutes=30', 'POST', bytes, {
+    'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent('10월 근태.xlsx'),
+  })
+  assert.equal(comparison.status, 200)
+  assert.equal(comparison.data.fileName, '10월 근태.xlsx')
+  assert.ok(comparison.data.reportId)
+  const reports = await call('/api/attendance/reports')
+  assert.ok(reports.data.some(report => report.id === comparison.data.reportId && report.fileName === '10월 근태.xlsx'))
+  const restored = await call(`/api/attendance/reports/${comparison.data.reportId}`)
+  assert.equal(restored.status, 200)
+  assert.deepEqual(restored.data.result, Object.fromEntries(Object.entries(comparison.data).filter(([key]) => !['reportId', 'fileName'].includes(key))))
 })
 test('full-day manual assignments are accepted and returned without losing the full code', async () => {
   const date = '2026-10-25'

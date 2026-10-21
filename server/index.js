@@ -406,12 +406,33 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
       const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
       return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
     })
-    res.json(compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes }))
+    const result = compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes })
+    let fileName = '근태등록 엑셀'
+    try { fileName = decodeURIComponent(req.get('x-file-name') ?? fileName) } catch {}
+    fileName = [...fileName].filter(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127 && character !== '/' && character !== '\\').join('').trim().slice(0, 120) || '근태등록 엑셀'
+    const saved = await db.prepare('INSERT INTO attendance_reports (file_name, result_json) VALUES (?, ?)').run(fileName, JSON.stringify(result))
+    await db.prepare('DELETE FROM attendance_reports WHERE id NOT IN (SELECT id FROM attendance_reports ORDER BY created_at DESC, id DESC LIMIT 24)').run()
+    res.json({ ...result, reportId: saved.lastInsertRowid, fileName })
   } catch (error) { next(error) }
+})
+app.get('/api/attendance/reports', requireAdmin, async (_req, res) => {
+  const reports = await db.prepare(`SELECT id, file_name AS fileName, created_at AS createdAt,
+    (result_json::jsonb ->> 'from') AS fromDate, (result_json::jsonb ->> 'to') AS toDate,
+    (result_json::jsonb ->> 'importedRows')::integer AS importedRows
+    FROM attendance_reports ORDER BY created_at DESC, id DESC LIMIT 24`).all()
+  res.json(reports)
+})
+app.get('/api/attendance/reports/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id)
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: '근태 비교 이력 번호가 올바르지 않습니다.' })
+  const report = await db.prepare('SELECT id, file_name AS fileName, result_json AS resultJson, created_at AS createdAt FROM attendance_reports WHERE id = ?').get(id)
+  if (!report) return res.status(404).json({ error: '저장된 근태 비교 이력을 찾지 못했습니다.' })
+  res.json({ id: report.id, fileName: report.fileName, createdAt: report.createdAt, result: JSON.parse(report.resultJson) })
 })
 app.post('/api/attendance/overtime-sheet', requireAdmin, async (req, res) => {
   try {
-    const workbook = await createOvertimeWorkbook(req.body ?? {})
+    const input = req.body ?? {}
+    const workbook = await createOvertimeWorkbook(input)
     const buffer = await workbook.xlsx.writeBuffer()
     const from = req.body.from
     const to = req.body.to

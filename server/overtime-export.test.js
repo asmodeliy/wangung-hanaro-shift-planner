@@ -27,6 +27,15 @@ test('overtime workbook follows the time-out record form with a sheet per employ
   assert.deepEqual([sheet.getCell('A7').value, sheet.getCell('C7').value, sheet.getCell('D7').value], ['2026-10-15', '17:00', '33분'])
   assert.deepEqual([sheet.getCell('E7').value, sheet.getCell('F7').value, sheet.getCell('I7').value, sheet.getCell('J7').value], ['', '', '', ''])
   assert.equal(sheet.pageSetup.orientation, 'portrait')
+
+  const individual = await createOvertimeWorkbook({
+    from: '2026-10-14', to: '2026-10-21', employeeId: 8,
+    overtime: [
+      { employeeId: 8, employeeName: '최창섭', date: '2026-10-15', expectedEnd: '17:00', minutes: 33 },
+      { employeeId: 7, employeeName: '정지희', date: '2026-10-14', expectedEnd: '20:00', minutes: 40 },
+    ],
+  })
+  assert.deepEqual(individual.worksheets.map(item => item.name), ['최창섭'])
 })
 
 test('overtime workbook rejects invalid dates, employee identifiers and durations', async () => {
