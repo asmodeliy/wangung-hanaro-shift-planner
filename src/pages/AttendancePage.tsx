@@ -22,6 +22,7 @@ type AttendanceResult = {
   from: string
   to: string
   importedRows: number
+  graceMinutes?: number
   overtimeThresholdMinutes: number
   overtimeRoundMinutes?: number
   counts: { compared: number; normal: number; needsReview: number; inProgress: number; unexpectedWork: number; unmatched: number; overtime: number; overtimeMinutes: number }
@@ -84,6 +85,7 @@ export function AttendancePage() {
   const [selectedReportId, setSelectedReportId] = useState('')
   const [loadingSaved, setLoadingSaved] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [recompareBusy, setRecompareBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<'all' | 'review'>('all')
@@ -117,7 +119,31 @@ export function AttendancePage() {
     if (!response.ok) throw new Error('선택한 근태 이력을 불러오지 못했습니다.')
     const saved = await response.json() as { result: AttendanceResult }
     setResult(saved.result)
+    if (saved.result.graceMinutes !== undefined) setGraceMinutes(saved.result.graceMinutes)
+    if (saved.result.overtimeThresholdMinutes !== undefined) setOvertimeThresholdMinutes(saved.result.overtimeThresholdMinutes)
+    if (saved.result.overtimeRoundMinutes !== undefined) setOvertimeRoundMinutes(saved.result.overtimeRoundMinutes)
     setDateFilter('all')
+  }
+
+  const recompareSavedReport = async () => {
+    if (!selectedReportId || recompareBusy) return
+    setRecompareBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/attendance/reports/${selectedReportId}/recompare`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes }),
+      })
+      const body = await response.json().catch(() => null) as AttendanceResult | { error?: string } | null
+      if (!response.ok) throw new Error(body && 'error' in body && body.error ? body.error : `근태 재비교에 실패했습니다. (${response.status})`)
+      const comparison = body as AttendanceResult
+      setResult(comparison)
+      await loadSavedReport(comparison.reportId)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '근태 재비교 중 오류가 발생했습니다.')
+    } finally {
+      setRecompareBusy(false)
+    }
   }
 
   useEffect(() => {
@@ -246,6 +272,7 @@ export function AttendancePage() {
           {reports.map(report => <option key={report.id} value={report.id}>{report.fromDate} ~ {report.toDate} · {report.fileName} · {new Date(report.createdAt).toLocaleString('ko-KR')}</option>)}
         </select>
       </label>}
+      {reports.length > 0 && <div className="attendance-selected"><span><b>선택한 출퇴근 기록 재비교</b><small>현재 근무표와 위의 허용 시간·시간외 기준으로 새 이력을 만듭니다.</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={!selectedReportId || loadingSaved || recompareBusy} onClick={() => void recompareSavedReport()}>{recompareBusy ? '현재 근무표로 다시 계산 중…' : '현재 근무표로 재비교'}</button></div>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
       <p className="muted small attendance-note">선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. ‘근태 비교’를 누르면 결과가 저장되어 비교 이력에서 다시 열 수 있습니다. 시간외 분은 설정한 단위로 버림 처리하며 0분이면 원래 분을 유지합니다. 실제 일정이 과거 근무표와 다르면 운영 설정에서 해당 날짜를 수정 허용한 뒤 근무표를 고쳐 다시 비교하세요.</p>

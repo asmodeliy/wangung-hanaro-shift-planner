@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
-import { compareAttendance, parseAttendanceWorkbook } from './attendance.js'
+import { compareAttendance, parseAttendanceWorkbook, recompareAttendance } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
@@ -430,6 +430,39 @@ app.get('/api/attendance/reports/:id', requireAdmin, async (req, res) => {
   const report = await db.prepare('SELECT id, file_name AS fileName, result_json AS resultJson, created_at AS createdAt FROM attendance_reports WHERE id = ?').get(id)
   if (!report) return res.status(404).json({ error: '저장된 근태 비교 이력을 찾지 못했습니다.' })
   res.json({ id: report.id, fileName: report.fileName, createdAt: report.createdAt, result: JSON.parse(report.resultJson) })
+})
+app.post('/api/attendance/reports/:id/recompare', requireAdmin, async (req, res, next) => {
+  const id = Number(req.params.id)
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: '근태 비교 이력 번호가 올바르지 않습니다.' })
+  const report = await db.prepare('SELECT file_name AS fileName, result_json AS resultJson FROM attendance_reports WHERE id = ?').get(id)
+  if (!report) return res.status(404).json({ error: '저장된 근태 비교 이력을 찾지 못했습니다.' })
+  try {
+    const savedResult = JSON.parse(report.resultJson)
+    const graceMinutes = Number(req.body?.graceMinutes ?? savedResult.graceMinutes ?? 5)
+    const overtimeThresholdMinutes = Number(req.body?.overtimeThresholdMinutes ?? savedResult.overtimeThresholdMinutes ?? 30)
+    const overtimeRoundMinutes = Number(req.body?.overtimeRoundMinutes ?? savedResult.overtimeRoundMinutes ?? 30)
+    if (!Number.isInteger(graceMinutes) || graceMinutes < 0 || graceMinutes > 60) return res.status(400).json({ error: '지각·조퇴 허용 시간은 0~60분으로 설정해 주세요.' })
+    if (!Number.isInteger(overtimeThresholdMinutes) || overtimeThresholdMinutes < 0 || overtimeThresholdMinutes > 240) return res.status(400).json({ error: '시간외근무표 작성 기준은 0~240분으로 설정해 주세요.' })
+    if (!Number.isInteger(overtimeRoundMinutes) || overtimeRoundMinutes < 0 || overtimeRoundMinutes > 240) return res.status(400).json({ error: '시간외근무 버림 단위는 0~240분으로 설정해 주세요.' })
+    const [settings, employees] = await Promise.all([
+      readSettings(),
+      db.prepare('SELECT id, name, employment_type AS employmentType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active FROM employees ORDER BY sort_order, id').all(),
+    ])
+    const scheduled = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code
+      FROM shifts s WHERE s.shift_date >= ? AND s.shift_date <= ? ORDER BY s.shift_date, s.employee_id`).all(savedResult.from, savedResult.to)
+    const shifts = scheduled.map(shift => {
+      const employee = employees.find(row => Number(row.id) === Number(shift.employeeId))
+      if (!employee || shift.code === 'off') return { ...shift, employeeId: Number(shift.employeeId), start: null, end: null }
+      const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
+      return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
+    })
+    const result = recompareAttendance({ savedResult, employees, shifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
+    const baseName = [...String(report.fileName || '근태등록 엑셀')].slice(0, 105).join('')
+    const fileName = `${baseName} · 재비교`
+    const saved = await db.prepare('INSERT INTO attendance_reports (file_name, result_json) VALUES (?, ?)').run(fileName, JSON.stringify(result))
+    await db.prepare('DELETE FROM attendance_reports WHERE id NOT IN (SELECT id FROM attendance_reports ORDER BY created_at DESC, id DESC LIMIT 24)').run()
+    res.json({ ...result, reportId: saved.lastInsertRowid, fileName })
+  } catch (error) { next(error) }
 })
 app.post('/api/attendance/overtime-sheet', requireAdmin, async (req, res) => {
   try {

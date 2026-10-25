@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { compareAttendance } from './attendance.js'
+import { compareAttendance, recompareAttendance } from './attendance.js'
 
 test('attendance comparison exports scheduled overtime at the configured threshold and excludes shorter overtime', () => {
   const report = {
@@ -56,4 +56,25 @@ test('attendance overtime is rounded down to the configured unit before it is co
   assert.equal(rounded.counts.overtimeMinutes, 90)
   assert.equal(rounded.rows.find(row => row.date === '2026-11-02').actualOvertimeMinutes, 59)
   assert.equal(compareAttendance({ ...input, overtimeThresholdMinutes: 30, overtimeRoundMinutes: 0 }).overtime[0].minutes, 59)
+})
+
+test('saved attendance can be re-compared against the current schedule and rounding settings', () => {
+  const savedResult = {
+    from: '2026-11-01', to: '2026-11-01', importedRows: 1, graceMinutes: 5,
+    overtimeThresholdMinutes: 30, overtimeRoundMinutes: 0,
+    rows: [{ employeeId: 1, employeeName: '테스트 직원', date: '2026-11-01', scheduledCode: 'open', expectedStart: '09:00', expectedEnd: '17:00', actualStart: '09:00', actualEnd: '19:29', overtimeMinutes: 149, status: '초과근무 149분', severity: 'info' }],
+    overtime: [], unmatched: [{ name: '미등록 직원', date: '2026-11-01', checkIn: '09:01', checkOut: '18:45', reason: '등록된 직원을 찾지 못했습니다.' }],
+  }
+  const current = recompareAttendance({
+    savedResult,
+    employees: [{ id: 1, name: '테스트 직원' }],
+    shifts: [{ employeeId: 1, date: '2026-11-01', code: 'open', start: '09:00', end: '18:30' }],
+    overtimeThresholdMinutes: 30, overtimeRoundMinutes: 30, now: new Date('2026-11-03T00:00:00Z'),
+  })
+  assert.equal(current.rows[0].expectedEnd, '18:30')
+  assert.equal(current.rows[0].actualOvertimeMinutes, 59)
+  assert.equal(current.rows[0].overtimeMinutes, 30)
+  assert.equal(current.overtime[0].minutes, 30)
+  assert.equal(current.graceMinutes, 5)
+  assert.equal(current.unmatched[0].name, '미등록 직원')
 })

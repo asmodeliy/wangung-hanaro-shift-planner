@@ -61,6 +61,18 @@ test('attendance comparisons are saved and can be reopened after a page reload',
   const restored = await call(`/api/attendance/reports/${comparison.data.reportId}`)
   assert.equal(restored.status, 200)
   assert.deepEqual(restored.data.result, Object.fromEntries(Object.entries(comparison.data).filter(([key]) => !['reportId', 'fileName'].includes(key))))
+  const invalidRecompare = await call(`/api/attendance/reports/${comparison.data.reportId}/recompare`, 'POST', { overtimeRoundMinutes: 241 })
+  assert.equal(invalidRecompare.status, 400)
+  const recompare = await call(`/api/attendance/reports/${comparison.data.reportId}/recompare`, 'POST', { graceMinutes: 0, overtimeThresholdMinutes: 0, overtimeRoundMinutes: 30 })
+  assert.equal(recompare.status, 200)
+  assert.notEqual(recompare.data.reportId, comparison.data.reportId)
+  assert.match(recompare.data.fileName, /재비교/)
+  assert.equal(recompare.data.graceMinutes, 0)
+  assert.equal(recompare.data.overtimeRoundMinutes, 30)
+  const recompareSaved = await call(`/api/attendance/reports/${recompare.data.reportId}`)
+  assert.equal(recompareSaved.status, 200)
+  assert.deepEqual(recompareSaved.data.result, Object.fromEntries(Object.entries(recompare.data).filter(([key]) => !['reportId', 'fileName'].includes(key))))
+  assert.equal((await call(`/api/attendance/reports/${comparison.data.reportId}`)).status, 200)
 })
 test('full-day manual assignments are accepted and returned without losing the full code', async () => {
   const date = '2026-10-25'

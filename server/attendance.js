@@ -252,5 +252,27 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     actualEnd: row.actualEnd,
     minutes: row.overtimeMinutes,
   }))
-  return { from: report.from, to: report.to, importedRows: report.importedRows, overtimeThresholdMinutes, overtimeRoundMinutes, counts, rows, overtime, unmatched }
+  return { from: report.from, to: report.to, importedRows: report.importedRows, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes, counts, rows, overtime, unmatched }
+}
+
+export function recompareAttendance({ savedResult, employees, shifts, graceMinutes = savedResult?.graceMinutes ?? 5, overtimeThresholdMinutes = savedResult?.overtimeThresholdMinutes ?? 30, overtimeRoundMinutes = savedResult?.overtimeRoundMinutes ?? 30, now = new Date() }) {
+  if (!savedResult || !/^\d{4}-\d{2}-\d{2}$/.test(savedResult.from) || !/^\d{4}-\d{2}-\d{2}$/.test(savedResult.to)
+    || !Array.isArray(savedResult.rows) || !Array.isArray(savedResult.unmatched) || !Number.isInteger(savedResult.importedRows)) {
+    throw new Error('저장된 근태 비교 결과를 다시 계산할 수 없습니다.')
+  }
+  const attendance = savedResult.rows
+    .filter(row => row.actualStart || row.actualEnd)
+    .map(row => ({ name: row.employeeName, normalizedName: normalizeAttendanceName(row.employeeName), date: row.date, checkIn: row.actualStart, checkOut: row.actualEnd }))
+  for (const row of savedResult.unmatched) {
+    if (row.checkIn || row.checkOut) attendance.push({ name: row.name, normalizedName: normalizeAttendanceName(row.name), date: row.date, checkIn: row.checkIn, checkOut: row.checkOut })
+  }
+  return compareAttendance({
+    report: { from: savedResult.from, to: savedResult.to, importedRows: savedResult.importedRows, attendance },
+    employees,
+    shifts,
+    graceMinutes,
+    overtimeThresholdMinutes,
+    overtimeRoundMinutes,
+    now,
+  })
 }
