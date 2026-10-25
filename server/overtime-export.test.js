@@ -26,6 +26,7 @@ test('overtime workbook follows the time-out record form with a sheet per employ
   assert.equal(sheet.getCell('I5').value, '사후확인')
   assert.deepEqual([sheet.getCell('A7').value, sheet.getCell('C7').value, sheet.getCell('D7').value], ['2026-10-15', '17:00', '33분'])
   assert.deepEqual([sheet.getCell('E7').value, sheet.getCell('F7').value, sheet.getCell('I7').value, sheet.getCell('J7').value], ['', '', '', ''])
+  assert.equal(sheet.getCell('E8').master.address, 'E7', '본인 서명란은 날짜 행 전체를 한 칸으로 합친다')
   assert.equal(sheet.pageSetup.orientation, 'portrait')
 
   const individual = await createOvertimeWorkbook({

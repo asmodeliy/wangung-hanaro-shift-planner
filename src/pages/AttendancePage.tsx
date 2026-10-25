@@ -9,6 +9,7 @@ type AttendanceRow = {
   expectedEnd: string | null
   actualStart: string | null
   actualEnd: string | null
+  actualOvertimeMinutes?: number
   status: string
   overtimeMinutes: number
   severity: 'ok' | 'info' | 'warning' | 'critical'
@@ -22,6 +23,7 @@ type AttendanceResult = {
   to: string
   importedRows: number
   overtimeThresholdMinutes: number
+  overtimeRoundMinutes?: number
   counts: { compared: number; normal: number; needsReview: number; inProgress: number; unexpectedWork: number; unmatched: number; overtime: number; overtimeMinutes: number }
   rows: AttendanceRow[]
   overtime: OvertimeRow[]
@@ -76,6 +78,7 @@ export function AttendancePage() {
   const [uploadSaved, setUploadSaved] = useState(false)
   const [graceMinutes, setGraceMinutes] = useState(5)
   const [overtimeThresholdMinutes, setOvertimeThresholdMinutes] = useState(30)
+  const [overtimeRoundMinutes, setOvertimeRoundMinutes] = useState(30)
   const [result, setResult] = useState<AttendanceResult | null>(null)
   const [reports, setReports] = useState<SavedReport[]>([])
   const [selectedReportId, setSelectedReportId] = useState('')
@@ -165,7 +168,7 @@ export function AttendancePage() {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`/api/attendance/compare?graceMinutes=${graceMinutes}&overtimeThresholdMinutes=${overtimeThresholdMinutes}`, {
+      const response = await fetch(`/api/attendance/compare?graceMinutes=${graceMinutes}&overtimeThresholdMinutes=${overtimeThresholdMinutes}&overtimeRoundMinutes=${overtimeRoundMinutes}`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
@@ -232,6 +235,9 @@ export function AttendancePage() {
         <label className="field attendance-overtime-threshold">시간외 근무표 기준
           <span className="unit"><input type="number" min={0} max={240} step={5} value={overtimeThresholdMinutes} onChange={event => setOvertimeThresholdMinutes(Math.max(0, Math.min(240, Number(event.target.value) || 0)))}/>분</span>
         </label>
+        <label className="field">시간외 분 단위 버림
+          <span className="unit"><input type="number" min={0} max={240} step={5} value={overtimeRoundMinutes} onChange={event => setOvertimeRoundMinutes(Math.max(0, Math.min(240, Number(event.target.value) || 0)))}/>분</span>
+        </label>
         <button className="btn btn-primary attendance-submit" type="button" disabled={!file || busy} onClick={() => void compare()}>{busy ? '근무표와 비교 중…' : '근태 비교'}</button>
       </div>
       {file && <div className="attendance-selected"><span><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)}KB{uploadSaved ? ' · 이 브라우저에 저장됨' : ''}</small></span><button type="button" className="btn btn-ghost btn-sm" onClick={() => chooseFile(null)}>파일 변경</button></div>}
@@ -242,7 +248,7 @@ export function AttendancePage() {
       </label>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
-      <p className="muted small attendance-note">선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. ‘근태 비교’를 누르면 결과가 저장되어 비교 이력에서 다시 열 수 있습니다. 기준 이상 늦게 퇴근한 기록은 개인별 시간외 기록부로 내려받을 수 있습니다.</p>
+      <p className="muted small attendance-note">선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. ‘근태 비교’를 누르면 결과가 저장되어 비교 이력에서 다시 열 수 있습니다. 시간외 분은 설정한 단위로 버림 처리하며 0분이면 원래 분을 유지합니다. 실제 일정이 과거 근무표와 다르면 운영 설정에서 해당 날짜를 수정 허용한 뒤 근무표를 고쳐 다시 비교하세요.</p>
     </section>
 
     {result && <>
@@ -271,7 +277,7 @@ export function AttendancePage() {
             <td>{dateLabel(row.date)}</td><th scope="row">{row.employeeName}</th>
             <td>{row.scheduledCode ? <><b>{shiftNames[row.scheduledCode]}</b><small>{row.expectedStart && row.expectedEnd ? `${row.expectedStart}–${row.expectedEnd}` : '시간 정보 없음'}</small></> : <span className="muted">근무표 없음</span>}</td>
             <td><span>출근 {row.actualStart ?? '—'}</span><small>퇴근 {row.actualEnd ?? '—'}</small></td>
-            <td><span className={`attendance-status status-${row.severity}`}>{row.status}</span></td>
+            <td><span className={`attendance-status status-${row.severity}`}>{row.status}</span>{(row.actualOvertimeMinutes ?? row.overtimeMinutes) > row.overtimeMinutes && <small>실제 초과 {(row.actualOvertimeMinutes ?? row.overtimeMinutes)}분 · 반영 {row.overtimeMinutes}분</small>}</td>
           </tr>)}</tbody>
         </table></div> : <p className="attendance-empty">{filter === 'review' ? '선택한 조건에 확인할 항목이 없습니다.' : '표시할 근태 비교 결과가 없습니다.'}</p>}
       </section>

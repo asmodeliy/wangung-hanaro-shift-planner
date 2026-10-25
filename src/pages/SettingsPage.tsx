@@ -210,7 +210,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         </div>
         <DateList dates={settings.editablePastShiftDates} emptyText="허용한 과거 날짜가 없습니다." suffix="허용 해제"
           onRemove={date => update(current => ({ ...current, editablePastShiftDates: current.editablePastShiftDates.filter(item => item !== date) }))}/>
-        <p className="muted small">오늘 이전 일정은 기본적으로 수정할 수 없습니다. 추가한 날짜만 수정할 수 있습니다.</p>
+        <p className="muted small">오늘 이전 일정은 기본적으로 수정할 수 없습니다. 추가한 날짜만 근무표에서 수정할 수 있습니다. 실제 근무 변경을 반영하려면 날짜를 허용한 뒤 근무표를 고치고 근태 파일을 다시 비교하세요. 비교는 저장된 현재 근무표를 기준으로 합니다.</p>
       </section>
 
       <section className="panel pad settings-card-pairs">

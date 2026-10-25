@@ -387,6 +387,8 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
   if (!Number.isInteger(graceMinutes) || graceMinutes < 0 || graceMinutes > 60) return res.status(400).json({ error: '지각·조퇴 허용 시간은 0~60분으로 설정해 주세요.' })
   const overtimeThresholdMinutes = Number(req.query.overtimeThresholdMinutes ?? 30)
   if (!Number.isInteger(overtimeThresholdMinutes) || overtimeThresholdMinutes < 0 || overtimeThresholdMinutes > 240) return res.status(400).json({ error: '시간외근무표 작성 기준은 0~240분으로 설정해 주세요.' })
+  const overtimeRoundMinutes = Number(req.query.overtimeRoundMinutes ?? 30)
+  if (!Number.isInteger(overtimeRoundMinutes) || overtimeRoundMinutes < 0 || overtimeRoundMinutes > 240) return res.status(400).json({ error: '시간외근무 버림 단위는 0~240분으로 설정해 주세요.' })
   let report
   try { report = parseAttendanceWorkbook(req.body) }
   catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : '근태 파일을 읽지 못했습니다.' }) }
@@ -406,7 +408,7 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
       const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
       return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
     })
-    const result = compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes })
+    const result = compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
     let fileName = '근태등록 엑셀'
     try { fileName = decodeURIComponent(req.get('x-file-name') ?? fileName) } catch {}
     fileName = [...fileName].filter(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127 && character !== '/' && character !== '\\').join('').trim().slice(0, 120) || '근태등록 엑셀'

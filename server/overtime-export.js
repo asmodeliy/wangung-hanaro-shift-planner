@@ -118,6 +118,11 @@ export async function createOvertimeWorkbook({ from, to, overtime, employeeId })
       })
       row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true }
     }
+    if (employee.records.length > 1) {
+      const lastDataRow = 6 + employee.records.length
+      sheet.mergeCells(`E7:E${lastDataRow}`)
+      sheet.getCell('E7').alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    }
     sheet.autoFilter = { from: 'A5', to: `K${5 + employee.records.length}` }
     sheet.pageSetup.printArea = `A1:K${6 + employee.records.length}`
     sheet.pageSetup.horizontalCentered = true

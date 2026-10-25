@@ -110,7 +110,7 @@ export function parseAttendanceWorkbook(buffer) {
 
 const minutesOfDay = time => time ? Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5)) : null
 
-export function compareAttendance({ report, employees, shifts, graceMinutes = 5, overtimeThresholdMinutes = 30, now = new Date() }) {
+export function compareAttendance({ report, employees, shifts, graceMinutes = 5, overtimeThresholdMinutes = 30, overtimeRoundMinutes = 30, now = new Date() }) {
   const employeeByName = new Map()
   for (const employee of employees) {
     const key = normalizeAttendanceName(employee.name)
@@ -157,6 +157,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     let lateMinutes = 0
     let earlyMinutes = 0
     let overtimeMinutes = 0
+    let actualOvertimeMinutes = 0
     if (!shift) {
       status.push('근무표 미편성')
       severity = 'warning'
@@ -168,7 +169,10 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
       const expectedEndMinute = minutesOfDay(expectedEnd)
       const inMinute = minutesOfDay(actualStart)
       const outMinute = minutesOfDay(actualEnd)
-      if (outMinute !== null && expectedEndMinute !== null && outMinute > expectedEndMinute) overtimeMinutes = outMinute - expectedEndMinute
+      if (outMinute !== null && expectedEndMinute !== null && outMinute > expectedEndMinute) actualOvertimeMinutes = outMinute - expectedEndMinute
+      overtimeMinutes = overtimeRoundMinutes > 0
+        ? Math.floor(actualOvertimeMinutes / overtimeRoundMinutes) * overtimeRoundMinutes
+        : actualOvertimeMinutes
       if (inMinute === null) {
         if (date > today || (date === today && expectedStartMinute !== null && currentMinute < expectedStartMinute - graceMinutes)) {
           status.push('출근 예정')
@@ -215,6 +219,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
       lateMinutes,
       earlyMinutes,
       overtimeMinutes,
+      actualOvertimeMinutes,
     })
   }
   for (const date of dateKeys) for (const shift of shifts.filter(item => item.date === date)) {
@@ -247,5 +252,5 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     actualEnd: row.actualEnd,
     minutes: row.overtimeMinutes,
   }))
-  return { from: report.from, to: report.to, importedRows: report.importedRows, overtimeThresholdMinutes, counts, rows, overtime, unmatched }
+  return { from: report.from, to: report.to, importedRows: report.importedRows, overtimeThresholdMinutes, overtimeRoundMinutes, counts, rows, overtime, unmatched }
 }
