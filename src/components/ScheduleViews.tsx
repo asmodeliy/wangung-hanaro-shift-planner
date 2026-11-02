@@ -51,11 +51,43 @@ function TotalsCell({ app, employee, totals, compact = false }: { app: AppState;
   </td>
 }
 
+/** Readable, seven-column store-duty overview shown with the monthly matrix. */
+function StoreDutyMonthGrid({ app }: { app: AppState }) {
+  const { month, dayCount, calendarLead, activeEmployees, settings, isAdmin, saveStoreDuty } = app
+  return <section className="store-duty-month" aria-label="월별 매장 당번">
+    <header><b>매장 당번</b><span>날짜별 오전·오후 담당</span></header>
+    <div className="store-duty-month-grid">
+      {weekdays.map((weekday, index) => <b className={dayTone(index, false)} key={weekday}>{weekday}</b>)}
+      {Array.from({ length: calendarLead }, (_, index) => <span className="store-duty-month-blank" key={`blank-${index}`} />)}
+      {Array.from({ length: dayCount }, (_, index) => {
+        const date = dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1))
+        const duty = settings.storeDuties[date] ?? { morning: null, afternoon: null }
+        return <article key={date}>
+          <b className="store-duty-month-date">{index + 1}일</b>
+          {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
+            const label = periodIndex === 0 ? '오전' : '오후'
+            const selected = activeEmployees.find(employee => employee.id === duty[period])
+            return <div className="store-duty-month-row" key={period}>
+              <span>{label}</span>
+              {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
+                <option value="">미정</option>
+                {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+              </select> : <strong>{selected?.name ?? '미정'}</strong>}
+            </div>
+          })}
+        </article>
+      })}
+    </div>
+  </section>
+}
+
 /** Whole-month matrix: one row per employee, one column per day. */
 export function MonthTable({ app }: { app: AppState }) {
   const { activeEmployees, monthSlots, holidayMap, visibleScheduleNotices, user } = app
   const totals = useTotals(app)
-  return <div className="grid-scroll" tabIndex={0} role="region" aria-label="월간 근무표">
+  return <>
+  <StoreDutyMonthGrid app={app}/>
+  <div className="grid-scroll" tabIndex={0} role="region" aria-label="월간 근무표">
     <table className="grid grid-month">
       <thead><tr>
         <th className="grid-staff">직원</th>
@@ -79,6 +111,7 @@ export function MonthTable({ app }: { app: AppState }) {
       })}</tbody>
     </table>
   </div>
+  </>
 }
 
 /** Seven-day view with hours and per-day staffing counters. */
