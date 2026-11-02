@@ -121,7 +121,7 @@ export function WeekTable({ app }: { app: AppState }) {
 
 /** Calendar layout: each day lists who opens, closes and rests. */
 export function MonthCalendar({ app }: { app: AppState }) {
-  const { month, dayCount, calendarLead, activeEmployees, shiftMap, holidayMap, visibleScheduleNotices, requests, settings, isAdmin } = app
+  const { month, dayCount, calendarLead, activeEmployees, shiftMap, holidayMap, visibleScheduleNotices, requests, settings, isAdmin, saveStoreDuty } = app
   return <div className="calendar">
     <div className="calendar-head">{weekdays.map((weekday, index) => <span key={weekday} className={dayTone(index, false)}>{weekday}</span>)}</div>
     <div className="calendar-body">
@@ -132,9 +132,23 @@ export function MonthCalendar({ app }: { app: AppState }) {
         const holiday = holidayMap.get(date)
         const notices = visibleScheduleNotices.filter(item => item.date === date)
         const hasFull = activeEmployees.some(employee => shiftMap.get(`${employee.id}:${date}`)?.code === 'full')
+        const duty = settings.storeDuties[date] ?? { morning: null, afternoon: null }
         const groups = (['open', 'close', 'full', 'off'] as const).filter(code => code !== 'full' || hasFull)
         return <article key={date} className={`calendar-day ${dayTone(d.getDay(), Boolean(holiday))} ${notices.length ? 'has-warning' : ''}`}>
           <header><b>{index + 1}</b>{holiday && <span>{holiday}</span>}{isAdmin && notices.length > 0 && <small>확인 {notices.length}</small>}</header>
+          <div className="store-duty" aria-label={`${index + 1}일 매장 당번`}>
+            {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
+              const label = periodIndex === 0 ? '오전' : '오후'
+              const selected = activeEmployees.find(employee => employee.id === duty[period])
+              return <div className="store-duty-row" key={period}>
+                <b>{label} 당번</b>
+                {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
+                  <option value="">미정</option>
+                  {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+                </select> : <strong>{selected?.name ?? '미정'}</strong>}
+              </div>
+            })}
+          </div>
           {groups.map(code => {
             const people = activeEmployees.filter(employee => shiftMap.get(`${employee.id}:${date}`)?.code === code)
             return <div className="calendar-group" key={code}>
@@ -157,7 +171,7 @@ export function MonthCalendar({ app }: { app: AppState }) {
 
 /** Narrow-screen layout: one card per day of the selected week. */
 export function WeekCards({ app }: { app: AppState }) {
-  const { weekDates, activeEmployees, shiftMap, holidayMap, visibleScheduleNotices, requests, settings, isAdmin, user, saveShift, cycleShift } = app
+  const { weekDates, activeEmployees, shiftMap, holidayMap, visibleScheduleNotices, requests, settings, isAdmin, user, saveShift, cycleShift, saveStoreDuty } = app
   return <div className="day-cards">
     {weekDates.filter((slot): slot is NonNullable<typeof slot> => slot !== null).map(slot => {
       const holiday = holidayMap.get(slot.date)
@@ -167,6 +181,20 @@ export function WeekCards({ app }: { app: AppState }) {
           <b>{slot.day}</b><span className={dayTone(slot.d.getDay(), Boolean(holiday))}>{weekdays[slot.d.getDay()]}</span>
           {holiday && <em>{holiday}</em>}{isAdmin && notices.length > 0 && <small>확인 {notices.length}건</small>}
         </header>
+        <div className="store-duty store-duty-card" aria-label={`${slot.day}일 매장 당번`}>
+          {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
+            const duty = settings.storeDuties[slot.date] ?? { morning: null, afternoon: null }
+            const label = periodIndex === 0 ? '오전' : '오후'
+            const selected = activeEmployees.find(employee => employee.id === duty[period])
+            return <div className="store-duty-row" key={period}>
+              <b>{label} 당번</b>
+              {isAdmin ? <select aria-label={`${slot.day}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(slot.date, period, event.target.value ? Number(event.target.value) : null)}>
+                <option value="">미정</option>
+                {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+              </select> : <strong>{selected?.name ?? '미정'}</strong>}
+            </div>
+          })}
+        </div>
         <ul>{activeEmployees.map((employee, index) => {
           const shift = shiftMap.get(`${employee.id}:${slot.date}`)
           const request = requests.find(item => item.employeeId === employee.id && item.date === slot.date && item.status !== 'rejected')

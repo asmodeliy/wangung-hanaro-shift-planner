@@ -72,6 +72,7 @@ export function SchedulePage({ app }: { app: AppState }) {
           {([['table', '월 표'], ['week', '주간'], ['calendar', '달력']] as const).map(([value, label]) =>
             <button key={value} role="tab" aria-selected={viewMode === value} className={viewMode === value ? 'is-active' : ''} onClick={() => changeViewMode(value)}>{label}</button>)}
         </div>
+        {isAdmin && viewMode !== 'calendar' && <button className="btn btn-ghost btn-sm only-wide" onClick={() => changeViewMode('calendar')}>오전·오후 당번 편집</button>}
       </div>
 
       <div className="status-row">

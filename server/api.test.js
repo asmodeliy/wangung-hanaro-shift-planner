@@ -43,6 +43,18 @@ test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-02-30', code: 'off' })).status, 400)
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
 })
+test('store duties are saved by date and split into morning and afternoon', async () => {
+  const date = '2026-11-03'
+  const morning = await call(`/api/store-duties/${date}`, 'PUT', { period: 'morning', employeeId: 1 })
+  assert.equal(morning.status, 200)
+  assert.equal(morning.data.morning, 1)
+  assert.equal(morning.data.afternoon, null)
+  const afternoon = await call(`/api/store-duties/${date}`, 'PUT', { period: 'afternoon', employeeId: 2 })
+  assert.equal(afternoon.status, 200)
+  assert.deepEqual(afternoon.data, { morning: 1, afternoon: 2 })
+  assert.equal((await call('/api/settings')).data.storeDuties[date].afternoon, 2)
+  assert.equal((await call(`/api/store-duties/2026-02-30`, 'PUT', { period: 'morning', employeeId: 1 })).status, 400)
+})
 test('attendance comparisons are saved and can be reopened after a page reload', async () => {
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([

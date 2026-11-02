@@ -30,7 +30,7 @@ const defaultSettings = {
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
     produceOpen: { start: '08:00', end: '17:00' },
   },
-  daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], editablePastShiftDates: [], confirmedMonths: [], operations: { ...defaultOperationRules },
+  daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], editablePastShiftDates: [], storeDuties: {}, confirmedMonths: [], operations: { ...defaultOperationRules },
 }
 
 const employeeCount = Number((await db.prepare('SELECT COUNT(*) AS n FROM employees').get()).n)
@@ -74,6 +74,7 @@ async function readSettings() {
   settings.daysOffPairs = Array.isArray(settings.daysOffPairs) ? settings.daysOffPairs : []
   settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
   settings.editablePastShiftDates = Array.isArray(settings.editablePastShiftDates) ? settings.editablePastShiftDates.filter(validDate) : []
+  settings.storeDuties = settings.storeDuties && typeof settings.storeDuties === 'object' && !Array.isArray(settings.storeDuties) ? settings.storeDuties : {}
   return settings
 }
 function shiftTimesForEmployee(employmentType, code, settings, produceQualified = false, produceBackup = false) {
@@ -606,6 +607,22 @@ app.delete('/api/users/employee/:employeeId', requireAdmin, async (req, res) => 
 })
 
 app.get('/api/settings', requireAdmin, async (_req, res) => res.json(await readSettings()))
+app.put('/api/store-duties/:date', requireAdmin, async (req, res) => {
+  const { date } = req.params
+  const { period, employeeId } = req.body ?? {}
+  if (!validDate(date) || !['morning', 'afternoon'].includes(period)) return res.status(400).json({ error: '당번 날짜와 오전·오후를 확인해 주세요.' })
+  const id = employeeId === null ? null : Number(employeeId)
+  if (id !== null && (!Number.isInteger(id) || !await db.prepare('SELECT 1 FROM employees WHERE id = ? AND active = 1').get(id))) return res.status(400).json({ error: '재직 중인 직원을 선택해 주세요.' })
+  let duty
+  await db.transaction(async () => {
+    await db.prepare('SELECT setting_key FROM app_settings WHERE setting_key = ? FOR UPDATE').get('main')
+    const settings = await readSettings()
+    duty = { morning: null, afternoon: null, ...settings.storeDuties[date], [period]: id }
+    settings.storeDuties[date] = duty
+    await saveSettings(settings)
+  })()
+  res.json(duty)
+})
 app.put('/api/settings', requireAdmin, async (req, res) => {
   const incoming = req.body ?? {}
   const settings = await readSettings()
