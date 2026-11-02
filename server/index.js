@@ -796,11 +796,12 @@ app.post('/api/shifts/history/:id/restore', requireAdmin, async (req, res, next)
 app.put('/api/shifts', requireAdmin, async (req, res) => {
   const { employeeId, date, code } = req.body ?? {}
   if (!Number.isInteger(Number(employeeId)) || !validDate(String(date ?? '')) || !['open', 'close', 'full', 'off', ''].includes(code)) return res.status(400).json({ error: '근무표 입력을 확인해 주세요.' })
-  if (date < seoulDateKey() && !(await readSettings()).editablePastShiftDates.includes(date)) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
+  const settings = await readSettings()
+  const explicitPastEdit = date < seoulDateKey() && settings.editablePastShiftDates.includes(date)
+  if (date < seoulDateKey() && !explicitPastEdit) return res.status(409).json({ error: `${date}는 지난 날짜라 고정되어 수정할 수 없습니다.` })
   const employeeRecord = await db.prepare('SELECT id, employment_type AS employmentType FROM employees WHERE id = ? AND active = 1').get(Number(employeeId))
   if (!employeeRecord) return res.status(404).json({ error: '재직 직원을 찾을 수 없습니다.' })
   const employee = Number(employeeId)
-  const settings = await readSettings()
   if (code === 'full') {
     const isWeekend = [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
     if (employeeRecord.employmentType !== '정규직' || !settings.operations.weekendRegularFullShift || !isWeekend) return res.status(422).json({ error: '종일근무는 주말 정규직만 배정할 수 있습니다.' })
@@ -808,16 +809,26 @@ app.put('/api/shifts', requireAdmin, async (req, res) => {
     if (await db.prepare("SELECT 1 FROM shifts WHERE employee_id = ? AND code = 'full' AND shift_date >= ? AND shift_date <= ? AND shift_date != ?").get(employee, weekStart, weekEnd, date)) return res.status(422).json({ error: '정규직 한 명은 한 주에 종일근무를 한 번만 할 수 있습니다.' })
     if (await db.prepare("SELECT 1 FROM shifts WHERE shift_date = ? AND code = 'full' AND employee_id != ?").get(date, employee)) return res.status(422).json({ error: '주말 하루에는 정규직 한 명만 종일근무할 수 있습니다.' })
   }
-  if (await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
+  if (!explicitPastEdit && await db.prepare('SELECT 1 FROM shift_locks WHERE employee_id = ? AND shift_date = ?').get(employee, date)) return res.status(409).json({ error: `${date}에 이미 입력한 근무는 확정되어 수정할 수 없습니다. 빈칸만 편집해 주세요.` })
   const previous = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(employee, date)
   if ((previous?.code ?? '') === code) return res.json({ ok: true })
   const month = date.slice(0, 7)
   await runTransaction(async () => {
     await recordScheduleHistory(month, req.user.username, `${date} 근무 수정`)
+    if (explicitPastEdit) {
+      await db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employee, date)
+      const remaining = await db.prepare('SELECT 1 FROM shift_locks WHERE shift_date >= ? AND shift_date < ? LIMIT 1').get(`${month}-01`, `${nextMonth(month)}-01`)
+      if (!remaining) await db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    }
     if (code === '') await db.prepare('DELETE FROM shifts WHERE employee_id = ? AND shift_date = ?').run(employee, date)
     else await db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code, updated_at = CURRENT_TIMESTAMP`).run(employee, date, code)
   }, () => {
     recordScheduleHistorySync(month, req.user.username, `${date} 근무 수정`)
+    if (explicitPastEdit) {
+      db.prepare('DELETE FROM shift_locks WHERE employee_id = ? AND shift_date = ?').run(employee, date)
+      const remaining = db.prepare('SELECT 1 FROM shift_locks WHERE shift_date >= ? AND shift_date < ? LIMIT 1').get(`${month}-01`, `${nextMonth(month)}-01`)
+      if (!remaining) db.prepare('DELETE FROM locked_months WHERE month = ?').run(month)
+    }
     if (code === '') db.prepare('DELETE FROM shifts WHERE employee_id = ? AND shift_date = ?').run(employee, date)
     else db.prepare(`INSERT INTO shifts (employee_id, shift_date, code) VALUES (?, ?, ?) ON CONFLICT(employee_id, shift_date) DO UPDATE SET code = excluded.code, updated_at = CURRENT_TIMESTAMP`).run(employee, date, code)
   })

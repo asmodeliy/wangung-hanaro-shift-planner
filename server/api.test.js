@@ -104,7 +104,9 @@ test('past dates are frozen unless the manager explicitly allows them in setting
   const settings = (await call('/api/settings')).data
   assert.equal((await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [date] })).status, 200)
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'off' })).status, 200)
-  assert.ok((await call('/api/shifts?month=2026-01')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'off'))
+  assert.equal((await call('/api/shifts/lock-cell', 'POST', { employeeId: 1, date, locked: true })).status, 200)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })).status, 200, 'explicit past-date permission overrides the cell lock')
+  assert.ok((await call('/api/shifts?month=2026-01')).data.some(row => row.employeeId === 1 && row.date === date && row.code === 'open' && !row.locked))
   assert.equal((await call('/api/settings', 'PUT', { ...settings, editablePastShiftDates: [] })).status, 200)
 })
 test('history restore brings back earlier shifts but never rewrites frozen past dates', async () => {

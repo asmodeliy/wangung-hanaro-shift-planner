@@ -1,6 +1,6 @@
 import type { AppState } from '../hooks/useApp'
 import type { Employee, Shift } from '../types'
-import { isLockedDate, shiftHours, shiftShort, shiftText } from '../lib/schedule'
+import { isLockedDate, shiftHours, shiftShort, shiftText, todayKey } from '../lib/schedule'
 
 type Props = { app: AppState; employee: Employee; date: string; day: number; showHours?: boolean; compact?: boolean }
 
@@ -11,11 +11,12 @@ export function ShiftCell({ app, employee, date, day, showHours = false, compact
   const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected')
   const approved = request?.status === 'approved'
   const pastLocked = isLockedDate(date, settings)
-  const frozen = pastLocked || Boolean(shift?.locked)
+  const explicitPastEdit = date < todayKey && settings.editablePastShiftDates.includes(date)
+  const frozen = pastLocked || Boolean(shift?.locked && !explicitPastEdit)
   const hours = shiftHours(employee, shift, settings, isAdmin)
   const label = shift ? shiftText[shift.code] : '미정'
   const title = [
-    shift?.locked ? '입력 확정 · 수정 불가' : pastLocked ? '지난 날짜 · 수정 잠금' : null,
+    shift?.locked && !explicitPastEdit ? '입력 확정 · 수정 불가' : pastLocked ? '지난 날짜 · 수정 잠금' : null,
     label,
     hours ? `${hours.start}–${hours.end}` : null,
     request ? `희망휴무 ${approved ? '승인' : '신청'}` : null,
