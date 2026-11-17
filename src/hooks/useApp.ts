@@ -136,7 +136,7 @@ export function useApp() {
   const employeeStats = new Map(validation.stats.map(stat => [stat.employeeId, stat]))
   const requestWarnings = requests.filter(item => item.status !== 'rejected' && shiftMap.get(item.employeeId + ':' + item.date)?.code !== 'off').map(item => ({ date: item.date, text: item.employeeName + ': ' + item.date + ' 희망휴무 미반영' }))
   const hiddenNoticeSet = new Set(dismissedNoticeKeys[monthKey(month)] ?? [])
-  const visibleScheduleNotices = scheduleNotices.filter(item => !hiddenNoticeSet.has(`${item.date ?? ''}:${item.text}`))
+  const visibleScheduleNotices = scheduleNotices.filter(item => issues.includes(item) || !hiddenNoticeSet.has(`${item.date ?? ''}:${item.text}`))
   const visibleRequestWarnings = requestWarnings.filter(item => !hiddenNoticeSet.has(`${item.date ?? ''}:${item.text}`))
   const selectedOption = scheduleOptions?.options.find(option => option.id === selectedOptionId) ?? scheduleOptions?.options[0]
   const previewDays = scheduleOptions ? Array.from({ length: new Date(Number(scheduleOptions.month.slice(0, 4)), Number(scheduleOptions.month.slice(5, 7)), 0).getDate() }, (_, index) => index + 1) : []
@@ -339,9 +339,23 @@ export function useApp() {
   const toggleDate = (date: string) => setChosenDates(values => values.includes(date) ? values.filter(value => value !== date) : [...values, date].sort())
   const addHoliday = async () => { if (!holidayDate) return; await saveSettings({ ...settings, additionalHolidays: [...new Set([...settings.additionalHolidays, holidayDate])].sort() }); setHolidayDate('') }
   const confirmSchedule = async () => {
-    const blockingIssues = issues.filter(item => !/^\d{4}-\d{2}-\d{2} (오픈|마감) 정규직 없음$/.test(item.text))
-    if (blockingIssues.length) { setError(`확정 전에 확인이 필요합니다. ${blockingIssues.slice(0, 3).map(item => item.text).join(' · ')}`); return }
-    try { await api('/api/shifts/confirm', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) }); await load(); toast('근무표를 확정했습니다.') } catch (e) { setError(e instanceof Error ? e.message : '확정하지 못했습니다.'); await load() }
+    const targetMonth = monthKey(month)
+    const submit = (acknowledgement?: string) => fetch('/api/shifts/confirm', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month: targetMonth, ...(acknowledgement ? { acknowledgement } : {}) }),
+    })
+    try {
+      let response = await submit()
+      let body = await response.json()
+      if (response.status === 409 && Array.isArray(body.problems) && typeof body.acknowledgement === 'string') {
+        const details = body.problems.map((item: { text: string }) => `• ${item.text}`).join('\n')
+        if (!window.confirm(`${targetMonth} 근무표에 확인 항목 ${body.problems.length}건이 있습니다.\n\n${details}\n\n확인 항목을 남긴 채 근무표를 확정하시겠습니까?`)) { await load(); return }
+        response = await submit(body.acknowledgement)
+        body = await response.json()
+      }
+      if (!response.ok) throw new Error(response.status === 409 ? '확인 항목이 변경되어 확정하지 않았습니다. 다시 확인해 주세요.' : body.error ?? '확정하지 못했습니다.')
+      await load(); toast('근무표를 확정했습니다.')
+    } catch (e) { setError(e instanceof Error ? e.message : '확정하지 못했습니다.'); await load() }
   }
 
   return { authChecked, setAuthChecked, setupNeeded, setSetupNeeded, setupKeyRequired, setSetupKeyRequired, user, setUser, page, setPage, month, setMonth, employees, setEmployees, shifts, setShifts, requests, setRequests, settings, setSettings, holidays, setHolidays, accounts, setAccounts, validation, setValidation, generating, setGenerating, scheduleOptions, setScheduleOptions, selectedOptionId, setSelectedOptionId, showScheduleHistory, setShowScheduleHistory, scheduleHistory, setScheduleHistory, historyLoading, setHistoryLoading, photoImport, setPhotoImport, referenceAvailable, setReferenceAvailable, loading, setLoading, error, setError, notice, setNotice, dialog, setDialog, search, setSearch, chosenDates, setChosenDates, holidayDate, setHolidayDate, produceExceptionDate, setProduceExceptionDate, pastEditDate, setPastEditDate, accountDialog, setAccountDialog, showReference, setShowReference, showPasswordDialog, setShowPasswordDialog, sidebarCollapsed, setSidebarCollapsed, viewMode, setViewMode, dismissedNoticeKeys, setDismissedNoticeKeys, weekIndex, setWeekIndex, toggleSidebar, changeViewMode, dismissNotice, load, activeEmployees, dayCount, calendarLead, mondayLead, weekCount, weekDates, weekLabel, weekRangeLabel, monthSlots, shiftMap, holidayMap, restTarget, pendingCount, workCount, confirmed, lockedShiftCount, hasLockedShifts, isAdmin, issues, validationWarnings, scheduleNotices, employeeStats, requestWarnings, hiddenNoticeSet, visibleScheduleNotices, visibleRequestWarnings, selectedOption, previewDays, previewShifts, toast, openScheduleHistory, restoreScheduleHistory, changeMonth, goToToday, authenticate, logout, saveShift, cycleShift, saveEmployee, deleteEmployee, saveAccount, changePassword, saveSettings, saveStoreDuty, generate, findMoreOptions, applyScheduleOption, lockExistingShifts, toggleCellLock, resetMonth, updateRequest, submitRequests, deleteRequest, resolvePhotoNote, toggleDate, addHoliday, confirmSchedule }

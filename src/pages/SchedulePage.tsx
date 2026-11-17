@@ -12,7 +12,7 @@ export function SchedulePage({ app }: { app: AppState }) {
     user, isAdmin, month, viewMode, changeViewMode, changeMonth, goToToday, weekIndex, setWeekIndex, weekCount, weekRangeLabel,
     generating, hasLockedShifts, lockedShiftCount, generate, lockExistingShifts, resetMonth, openScheduleHistory, confirmed, confirmSchedule,
     referenceAvailable, setShowReference, loading, restTarget, activeEmployees, workCount, requests, settings,
-    visibleScheduleNotices, visibleRequestWarnings, dismissNotice, photoImport, resolvePhotoNote,
+    issues, visibleScheduleNotices, visibleRequestWarnings, dismissNotice, photoImport, resolvePhotoNote,
   } = app
   const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null)
   const noticeCount = visibleScheduleNotices.length + visibleRequestWarnings.length
@@ -109,7 +109,7 @@ export function SchedulePage({ app }: { app: AppState }) {
         <header><b>확인이 필요한 항목</b><span>{noticeCount}건</span></header>
         <ul>{[...visibleScheduleNotices, ...visibleRequestWarnings].map((notice, index) => <li key={`${notice.date ?? ''}:${notice.text}:${index}`}>
           <span>{notice.text}</span>
-          <button className="link" onClick={() => dismissNotice(notice)} aria-label={`${notice.text} 숨기기`}>숨기기</button>
+          {!issues.includes(notice) && <button className="link" onClick={() => dismissNotice(notice)} aria-label={`${notice.text} 숨기기`}>숨기기</button>}
         </li>)}</ul>
       </section>}
 

@@ -12,6 +12,7 @@ import { buildSchedulePdf } from './exportPdf.js'
 import { compareAttendance, parseAttendanceWorkbook, recompareAttendance, selectAttendanceMonth } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
 import { createOvertimeHwpxArchive } from './overtime-hwpx.js'
+import { confirmationToken } from './confirmation.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1003,7 +1004,8 @@ app.post('/api/shifts/confirm', requireAdmin, async (req, res) => {
   const blockingIssues = validation.issues.filter(issue => !staffingGaps.includes(issue))
   const pendingIssues = validation.pending
   const problems = [...blockingIssues, ...pendingIssues, ...await photoIssues(month)]
-  if (problems.length) return res.status(409).json({ error: '확정 전 확인: ' + problems.slice(0, 4).map(i => i.text).join(' · '), validation })
+  const token = confirmationToken(month, problems)
+  if (problems.length && req.body?.acknowledgement !== token) return res.status(409).json({ error: '확정 전 확인할 항목이 있습니다.', problems, acknowledgement: token })
   const settings = await readSettings()
   settings.confirmedMonths = [...new Set([...settings.confirmedMonths, month])]
   await saveSettings(settings)
