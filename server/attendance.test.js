@@ -95,3 +95,28 @@ test('saved attendance can be re-compared against the current schedule and round
   assert.equal(current.graceMinutes, 5)
   assert.equal(current.unmatched[0].name, '미등록 직원')
 })
+
+test('실제 근무 수정은 계획을 보존하면서 지문 퇴근과 실제 근무 종료시각으로 시간외를 다시 계산한다', () => {
+  const date = '2026-11-01'
+  const employees = [{ id: 1, name: '직원' }]
+  const shifts = [{ employeeId: 1, date, code: 'open', start: '08:00', end: '17:00' }]
+  const report = { from: date, to: date, importedRows: 1, attendance: [{ name: '직원', normalizedName: '직원', date, checkIn: '11:00', checkOut: '20:45' }] }
+  const savedResult = compareAttendance({ report, employees, shifts, overtimeRoundMinutes: 30 })
+  assert.equal(savedResult.overtime[0].minutes, 210)
+  const actualShifts = [{ employeeId: 1, date, code: 'close', start: '11:00', end: '20:00' }]
+  const revised = recompareAttendance({ savedResult, employees, shifts, actualShifts, overtimeRoundMinutes: 30 })
+  assert.equal(revised.rows[0].plannedCode, 'open')
+  assert.equal(revised.rows[0].scheduledCode, 'close')
+  assert.equal(revised.rows[0].actualEnd, '20:45')
+  assert.equal(revised.overtime[0].expectedEnd, '20:00')
+  assert.equal(revised.overtime[0].minutes, 30)
+  assert.deepEqual(revised.actualShifts, [{ employeeId: 1, date, code: 'close' }])
+  assert.equal(shifts[0].code, 'open')
+  const reset = recompareAttendance({ savedResult: revised, employees, shifts, actualShifts: [], overtimeRoundMinutes: 30 })
+  assert.equal(reset.overtime[0].minutes, 210)
+  const noPunch = compareAttendance({ report: { ...report, attendance: [] }, employees, shifts, now: new Date('2026-11-03T00:00:00Z') })
+  const rest = recompareAttendance({ savedResult: noPunch, employees, shifts, actualShifts: [{ employeeId: 1, date, code: 'off', start: null, end: null }] })
+  assert.equal(rest.rows[0].scheduledCode, 'off')
+  assert.equal(rest.rows[0].status, '휴무')
+  assert.equal(rest.rows[0].actualShiftEdited, true)
+})

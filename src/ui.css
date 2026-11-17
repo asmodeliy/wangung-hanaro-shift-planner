@@ -179,6 +179,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 .attendance-table thead th { position: sticky; top: 0; background: var(--surface-soft, #f7f9f7); color: var(--muted); font-size: 11px; font-weight: 700; }
 .attendance-table tbody th { font-weight: 700; }
 .attendance-table td small, .attendance-table td > b + small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.attendance-table select { min-height: 34px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); }
 .attendance-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .status-ok { background: var(--green-soft); color: var(--green-dark); }
 .status-info { background: #e8f1fb; color: #285b8f; }

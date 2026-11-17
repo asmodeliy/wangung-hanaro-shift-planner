@@ -5,6 +5,8 @@ type AttendanceRow = {
   employeeName: string
   date: string
   scheduledCode: 'open' | 'close' | 'full' | 'off' | null
+  plannedCode?: 'open' | 'close' | 'full' | 'off' | null
+  actualShiftEdited?: boolean
   expectedStart: string | null
   expectedEnd: string | null
   actualStart: string | null
@@ -15,6 +17,7 @@ type AttendanceRow = {
   severity: 'ok' | 'info' | 'warning' | 'critical'
 }
 type OvertimeRow = { employeeId: number | null; employeeName: string; date: string; scheduledCode: AttendanceRow['scheduledCode']; expectedEnd: string | null; actualEnd: string | null; minutes: number }
+type ActualShift = { employeeId: number; date: string; code: NonNullable<AttendanceRow['scheduledCode']> }
 type SavedReport = { id: number; fileName: string; createdAt: string; fromDate: string; toDate: string; importedRows: number }
 type AttendanceResult = {
   reportId?: number
@@ -28,6 +31,7 @@ type AttendanceResult = {
   counts: { compared: number; normal: number; needsReview: number; inProgress: number; unexpectedWork: number; unmatched: number; overtime: number; overtimeMinutes: number }
   rows: AttendanceRow[]
   overtime: OvertimeRow[]
+  actualShifts?: ActualShift[]
   unmatched: { name: string; date: string; checkIn: string | null; checkOut: string | null; reason: string }[]
 }
 
@@ -82,6 +86,7 @@ export function AttendancePage() {
   const [overtimeRoundMinutes, setOvertimeRoundMinutes] = useState(30)
   const [uploadMonth, setUploadMonth] = useState('')
   const [resultMonth, setResultMonth] = useState('all')
+  const [actualDraft, setActualDraft] = useState<ActualShift[]>([])
   const [result, setResult] = useState<AttendanceResult | null>(null)
   const [reports, setReports] = useState<SavedReport[]>([])
   const [selectedReportId, setSelectedReportId] = useState('')
@@ -125,7 +130,9 @@ export function AttendancePage() {
     }
     return { ...result, from, to, rows, overtime, unmatched, counts }
   }, [result, resultMonth])
-  useEffect(() => { setResultMonth('all'); setDateFilter('all') }, [result])
+  useEffect(() => { setResultMonth('all'); setDateFilter('all'); setActualDraft(result?.actualShifts ?? []) }, [result])
+  const sortActual = (items: ActualShift[]) => [...items].sort((a, b) => a.date.localeCompare(b.date) || a.employeeId - b.employeeId)
+  const hasUnsavedActual = JSON.stringify(sortActual(actualDraft)) !== JSON.stringify(sortActual(result?.actualShifts ?? []))
   const dates = useMemo(() => [...new Set(scopedResult?.rows.map(row => row.date) ?? [])], [scopedResult])
   const overtimePeople = useMemo(() => {
     const people = new Map<number, { employeeId: number; employeeName: string; count: number }>()
@@ -160,14 +167,14 @@ export function AttendancePage() {
     setDateFilter('all')
   }
 
-  const recompareSavedReport = async () => {
+  const recompareSavedReport = async (actualShifts?: ActualShift[]) => {
     if (!selectedReportId || recompareBusy) return
     setRecompareBusy(true)
     setError('')
     try {
       const response = await fetch(`/api/attendance/reports/${selectedReportId}/recompare`, {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes }),
+        body: JSON.stringify({ graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes, ...(actualShifts ? { actualShifts } : {}) }),
       })
       const body = await response.json().catch(() => null) as AttendanceResult | { error?: string } | null
       if (!response.ok) throw new Error(body && 'error' in body && body.error ? body.error : `근태 재비교에 실패했습니다. (${response.status})`)
@@ -251,7 +258,7 @@ export function AttendancePage() {
   }
 
   const downloadOvertimeSheet = async (employeeId?: number, format: 'xlsx' | 'hwpx' = 'xlsx') => {
-    if (!scopedResult?.overtime.length || exportBusy) return
+    if (!scopedResult?.overtime.length || exportBusy || hasUnsavedActual) return
     setExportBusy(true)
     setError('')
     try {
@@ -303,15 +310,15 @@ export function AttendancePage() {
         <label className="field">시간외 분 단위 버림
           <span className="unit"><input type="number" min={0} max={240} step={5} value={overtimeRoundMinutes} onChange={event => setOvertimeRoundMinutes(Math.max(0, Math.min(240, Number(event.target.value) || 0)))}/>분</span>
         </label>
-        <button className="btn btn-primary attendance-submit" type="button" disabled={!file || busy} onClick={() => void compare()}>{busy ? '근무표와 비교 중…' : '근태 비교'}</button>
+        <button className="btn btn-primary attendance-submit" type="button" disabled={!file || busy || hasUnsavedActual} onClick={() => void compare()}>{busy ? '근무표와 비교 중…' : '근태 비교'}</button>
       </div>
       {file && <div className="attendance-selected"><span><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)}KB{uploadSaved ? ' · 이 브라우저에 저장됨' : ''}</small></span><button type="button" className="btn btn-ghost btn-sm" onClick={() => chooseFile(null)}>파일 변경</button></div>}
       {reports.length > 0 && <label className="field attendance-history">저장된 비교 이력
-        <select value={selectedReportId} onChange={event => { const id = event.target.value; setSelectedReportId(id); void loadSavedReport(id).catch(cause => setError(cause instanceof Error ? cause.message : '근태 이력을 불러오지 못했습니다.')) }}>
+        <select value={selectedReportId} onChange={event => { if (hasUnsavedActual && !window.confirm('저장하지 않은 실제 근무 수정이 있습니다. 다른 이력을 열까요?')) return; const id = event.target.value; setSelectedReportId(id); void loadSavedReport(id).catch(cause => setError(cause instanceof Error ? cause.message : '근태 이력을 불러오지 못했습니다.')) }}>
           {reports.map(report => <option key={report.id} value={report.id}>{report.fromDate} ~ {report.toDate} · {report.fileName} · {new Date(report.createdAt).toLocaleString('ko-KR')}</option>)}
         </select>
       </label>}
-      {reports.length > 0 && <div className="attendance-selected"><span><b>선택한 출퇴근 기록 재비교</b><small>현재 근무표와 위의 허용 시간·시간외 기준으로 새 이력을 만듭니다.</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={!selectedReportId || loadingSaved || recompareBusy} onClick={() => void recompareSavedReport()}>{recompareBusy ? '현재 근무표로 다시 계산 중…' : '현재 근무표로 재비교'}</button></div>}
+      {reports.length > 0 && <div className="attendance-selected"><span><b>선택한 출퇴근 기록 재비교</b><small>현재 계획표와 저장된 실제 근무 수정, 위의 기준으로 새 이력을 만듭니다.</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={!selectedReportId || loadingSaved || recompareBusy || hasUnsavedActual} onClick={() => void recompareSavedReport()}>{recompareBusy ? '현재 근무표로 다시 계산 중…' : '현재 근무표로 재비교'}</button></div>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
       <p className="muted small attendance-note">비교할 월을 선택하면 파일에 있는 해당 월의 첫날부터 마지막 날까지 비교합니다. 비워두면 파일의 전체 기간을 비교합니다. 파일에 없는 기간은 비교하지 않습니다. 선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. 시간외 분은 설정한 단위로 버림 처리하며 0분이면 원래 분을 유지합니다. 실제 일정이 과거 근무표와 다르면 운영 설정에서 해당 날짜를 수정 허용한 뒤 근무표를 고쳐 다시 비교하세요.</p>
@@ -339,19 +346,21 @@ export function AttendancePage() {
 
       <section className="panel attendance-results">
         <div className="section-head attendance-result-head">
-          <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">근무표가 없는 날짜의 출근도 별도 확인 항목으로 표시합니다.</p></div>
-          {scopedResult.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${scopedResult.overtime.length}건)`}</button>}
-          {scopedResult.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
+          <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">계획과 실제 근무가 다르면 실제 근무를 선택하고 저장하세요. 저장하면 시간외를 다시 계산하며 계획표는 유지됩니다. 휴무일 출근은 시간외 자동 산정 대상이 아니므로 별도 확인이 필요합니다.</p></div>
+          {hasUnsavedActual && <button className="btn btn-primary btn-sm" type="button" disabled={recompareBusy} onClick={() => void recompareSavedReport(actualDraft)}>{recompareBusy ? '저장 및 재계산 중…' : '실제 근무 저장 및 재계산'}</button>}
+          {scopedResult.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${scopedResult.overtime.length}건)`}</button>}
+          {scopedResult.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
           <div className="attendance-filters">
             <label className="field">결과 보기<select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">전체 결과</option><option value="review">확인 필요</option></select></label>
             {dates.length > 1 && <label className="field">날짜<select value={dateFilter} onChange={event => setDateFilter(event.target.value)}><option value="all">전체 기간</option>{dates.map(date => <option key={date} value={date}>{dateLabel(date)}</option>)}</select></label>}
           </div>
         </div>
         {visibleRows.length ? <div className="attendance-table-wrap"><table className="attendance-table">
-          <thead><tr><th scope="col">날짜</th><th scope="col">직원</th><th scope="col">근무 예정</th><th scope="col">지문 기록</th><th scope="col">판정</th></tr></thead>
+          <thead><tr><th scope="col">날짜</th><th scope="col">직원</th><th scope="col">근무 계획</th><th scope="col">실제 근무</th><th scope="col">지문 기록</th><th scope="col">판정</th></tr></thead>
           <tbody>{visibleRows.map((row, index) => <tr key={`${row.date}:${row.employeeId ?? row.employeeName}:${index}`}>
             <td>{dateLabel(row.date)}</td><th scope="row">{row.employeeName}</th>
-            <td>{row.scheduledCode ? <><b>{shiftNames[row.scheduledCode]}</b><small>{row.expectedStart && row.expectedEnd ? `${row.expectedStart}–${row.expectedEnd}` : '시간 정보 없음'}</small></> : <span className="muted">근무표 없음</span>}</td>
+            <td>{(row.plannedCode === undefined ? row.scheduledCode : row.plannedCode) ? shiftNames[(row.plannedCode === undefined ? row.scheduledCode : row.plannedCode)!] : '근무표 없음'}</td>
+            <td>{row.employeeId !== null ? <><select aria-label={`${row.employeeName} ${row.date} 실제 근무`} value={actualDraft.find(item => item.employeeId === row.employeeId && item.date === row.date)?.code ?? 'planned'} disabled={recompareBusy} onChange={event => { const value = event.target.value; setActualDraft(current => { const other = current.filter(item => item.employeeId !== row.employeeId || item.date !== row.date); return value === 'planned' ? other : [...other, { employeeId: row.employeeId!, date: row.date, code: value as ActualShift['code'] }] }) }}><option value="planned">계획대로</option><option value="open">오픈</option><option value="close">마감</option><option value="full">종일</option><option value="off">휴무</option></select><small>{row.actualShiftEdited ? '저장된 실제 근무' : '계획 기준'}{row.expectedStart && row.expectedEnd ? ` · ${row.expectedStart}–${row.expectedEnd}` : ''}</small></> : '직원 확인 필요'}</td>
             <td><span>출근 {row.actualStart ?? '—'}</span><small>퇴근 {row.actualEnd ?? '—'}</small></td>
             <td><span className={`attendance-status status-${row.severity}`}>{row.status}</span>{(row.actualOvertimeMinutes ?? row.overtimeMinutes) > row.overtimeMinutes && <small>실제 초과 {(row.actualOvertimeMinutes ?? row.overtimeMinutes)}분 · 반영 {row.overtimeMinutes}분</small>}</td>
           </tr>)}</tbody>
@@ -360,7 +369,7 @@ export function AttendancePage() {
 
       {scopedResult.overtime.length > 0 && <section className="panel pad attendance-overtime-people">
         <h2>개인별 시간외 근무 기록부</h2>
-        <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 엑셀</button><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId, 'hwpx')}>{person.employeeName} 한글</button></li>)}</ul>
+        <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 엑셀</button><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet(person.employeeId, 'hwpx')}>{person.employeeName} 한글</button></li>)}</ul>
       </section>}
 
       {scopedResult.unmatched.length > 0 && <section className="panel pad attendance-unmatched">

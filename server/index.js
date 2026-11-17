@@ -459,7 +459,20 @@ app.post('/api/attendance/reports/:id/recompare', requireAdmin, async (req, res,
       const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
       return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
     })
-    const result = recompareAttendance({ savedResult, employees, shifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
+    const overrides = req.body?.actualShifts ?? savedResult.actualShifts ?? []
+    if (!Array.isArray(overrides) || overrides.length > 10000) return res.status(400).json({ error: '실제 근무 수정 내용을 확인해 주세요.' })
+    const available = new Set([...savedResult.rows, ...(savedResult.actualShifts ?? [])].filter(row => row.employeeId != null).map(row => `${row.employeeId}:${row.date}`))
+    const seen = new Set()
+    const actualShifts = []
+    for (const item of overrides) {
+      const key = `${item?.employeeId}:${item?.date}`
+      const employee = employees.find(row => Number(row.id) === item?.employeeId)
+      if (!Number.isSafeInteger(item?.employeeId) || !employee || typeof item.date !== 'string' || !validDate(item.date) || item.date < savedResult.from || item.date > savedResult.to || !['open', 'close', 'full', 'off'].includes(item.code) || !available.has(key) || seen.has(key)) return res.status(400).json({ error: '실제 근무 수정 내용에 잘못된 직원, 날짜 또는 근무가 있습니다.' })
+      seen.add(key)
+      const times = item.code === 'off' ? { start: null, end: null } : shiftTimesForEmployee(employee.employmentType, item.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
+      actualShifts.push({ employeeId: item.employeeId, date: item.date, code: item.code, start: times.start, end: times.end })
+    }
+    const result = recompareAttendance({ savedResult, employees, shifts, actualShifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
     const baseName = [...String(report.fileName || '근태등록 엑셀')].slice(0, 105).join('')
     const fileName = `${baseName} · 재비교`
     const saved = await db.prepare('INSERT INTO attendance_reports (file_name, result_json) VALUES (?, ?)').run(fileName, JSON.stringify(result))
