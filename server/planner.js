@@ -48,6 +48,14 @@ function employmentStaffingRules(date, holidays, operations) {
     { employmentType: '계약직', target: operations[`${prefix}ContractTarget`], minimum: operations[`${prefix}ContractMinimum`] },
   ]
 }
+// Staffing categories follow the assigned role; legacy records without a role
+// retain their original employment-based category.
+function staffingCategory(employee) {
+  if (employee.dutyType === 'functional') return '정규직'
+  if (employee.dutyType === 'support') return '계약직'
+  if (employee.dutyType === 'other') return null
+  return employee.employmentType
+}
 export function normalizeRules(value = defaultRules) {
   const allowedShifts = value.allowedShifts
   const offRules = value.offRules ?? []
@@ -122,8 +130,8 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
     else if (workingCount < preferred) warnings.push({ date, text: `${date} 권장 근무인원 미달 (${workingCount}명 / 목표 ${preferred}명, 최소 운영 기준 충족)` })
     for (const staffingRule of employmentStaffingRules(date, holidays, rules) ?? []) {
-      const count = employees.filter(employee => employee.employmentType === staffingRule.employmentType && works(entries.get(`${employee.id}:${date}`))).length
-      const label = staffingRule.employmentType
+      const count = employees.filter(employee => staffingCategory(employee) === staffingRule.employmentType && works(entries.get(`${employee.id}:${date}`))).length
+      const label = staffingRule.employmentType === '정규직' ? '일반직 업무' : '계약직 업무'
       if (count < staffingRule.minimum) issues.push({ date, text: `${date} ${label} 최소 인원 미충족 (${count}명 / 완화 기준 ${staffingRule.minimum}명)` })
       else if (count < staffingRule.target) warnings.push({ date, text: `${date} ${label} 목표 인원 미달 (${count}명 / 목표 ${staffingRule.target}명, 최소 기준 충족)` })
     }
@@ -473,7 +481,7 @@ export async function generateSchedule(input) {
     fallbackStaffingSlacks.push({ name: fallbackShortfall, coef: 1 })
     lo([...employees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code))), { name: fallbackShortfall, coef: 1 }], fallbackMinimumWorkersForDate(date, holidays, settings.operations))
     for (const staffingRule of employmentStaffingRules(date, holidays, operationRules(settings)) ?? []) {
-      const eligible = employees.filter(employee => employee.employmentType === staffingRule.employmentType)
+      const eligible = employees.filter(employee => staffingCategory(employee) === staffingRule.employmentType)
       const fallbackGap = `missing_${staffingRule.employmentType}_${dayKey}`
       const targetGap = `target_${staffingRule.employmentType}_${dayKey}`
       lp.bounds.push({ name: fallbackGap, type: glpk.GLP_LO, lb: 0, ub: 0 }, { name: targetGap, type: glpk.GLP_LO, lb: 0, ub: 0 })

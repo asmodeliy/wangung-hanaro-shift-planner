@@ -29,7 +29,7 @@ export const isActive = (employee: Employee) => employee.active === true || empl
 
 export const shiftText: Record<ShiftCode, string> = { open: '오픈', close: '마감', full: '종일', off: '휴무' }
 export const shiftShort: Record<ShiftCode, string> = { open: '오', close: '마', full: '종', off: '휴' }
-export const employmentLabel = (employee: Employee) => employee.employmentType === '계약직' ? '계약직' : '일반직'
+export const employmentLabel = (employee: Employee) => employee.employmentType === '계약직' ? '계약직' : '정규직'
 
 /** Working hours for one assignment. Managers see the configured times, staff see the server-provided ones. */
 export function shiftHours(employee: Employee, shift: Shift | undefined, settings: Settings, isAdmin: boolean): Times | null {

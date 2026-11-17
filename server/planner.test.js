@@ -155,7 +155,7 @@ test('employment type staffing mode applies separate targets, floors, validation
   const date = '2026-02-02'
   const underContract = employees.map(employee => ({ employeeId: employee.id, date, code: employee.id <= 3 ? 'open' : employee.id === 4 ? 'close' : 'off' }))
   const validation = validateSchedule({ ...base(), settings: { ...base().settings, operations }, shifts: underContract })
-  assert.ok(validation.issues.some(issue => issue.text.includes(`${date} 계약직 최소 인원 미충족`)))
+  assert.ok(validation.issues.some(issue => issue.text.includes(`${date} 계약직 업무 최소 인원 미충족`)))
   const input = { ...base(), settings: { ...base().settings, operations } }
   const result = await generateSchedule(input)
   assert.equal(result.error, undefined)
@@ -163,6 +163,22 @@ test('employment type staffing mode applies separate targets, floors, validation
   assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '정규직').length >= 1)
   assert.ok(day.filter(shift => employees.find(employee => employee.id === shift.employeeId).employmentType === '계약직').length >= 2)
   assert.deepEqual(validateSchedule({ ...input, shifts: result.shifts }).issues, [])
+})
+test('계약직이 일반직 업무를 맡으면 직무별 최소 인원에서 일반직으로만 계산한다', async () => {
+  const date = '2026-02-02'
+  const staff = employees.map(employee => ({ ...employee, dutyType: employee.id <= 3 || employee.id === 7 ? 'functional' : 'support' }))
+  const operations = { ...base().settings.operations, staffingMode: 'employmentType', weekdayRegularTarget: 2, weekdayRegularMinimum: 2, weekdayContractTarget: 2, weekdayContractMinimum: 2, weekendRegularTarget: 1, weekendRegularMinimum: 1, weekendContractTarget: 1, weekendContractMinimum: 1 }
+  const assigned = staff.map(employee => ({ employeeId: employee.id, date, code: [1, 4].includes(employee.id) ? 'open' : [5, 7].includes(employee.id) ? 'close' : 'off', locked: true }))
+  const input = { ...base(), employees: staff, settings: { ...base().settings, operations }, existingShifts: assigned, mode: 'rebalance', lockedThroughDate: '2026-01-31' }
+  const validation = validateSchedule({ ...input, shifts: assigned })
+  assert.equal(validation.issues.some(issue => issue.date === date && issue.text.includes('업무 최소 인원 미충족')), false)
+  const withoutFunctionalContract = assigned.map(shift => shift.employeeId === 7 ? { ...shift, code: 'off' } : shift)
+  assert.ok(validateSchedule({ ...input, shifts: withoutFunctionalContract }).issues.some(issue => issue.date === date && issue.text.includes('일반직 업무 최소 인원 미충족')))
+  const onlyOneSupport = assigned.map(shift => shift.employeeId === 5 ? { ...shift, code: 'off' } : shift)
+  assert.ok(validateSchedule({ ...input, shifts: onlyOneSupport }).issues.some(issue => issue.date === date && issue.text.includes('계약직 업무 최소 인원 미충족')))
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  assert.equal(validateSchedule({ ...input, shifts: result.shifts }).issues.some(issue => issue.date === date && issue.text.includes('업무 최소 인원 미충족')), false)
 })
 test('October staffing never drops below the relaxed threshold when three people can cover a fixed Sunday', async () => {
   const fixedDay = '2026-10-17'

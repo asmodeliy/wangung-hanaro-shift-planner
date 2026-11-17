@@ -9,10 +9,10 @@ const combinedFields: [NumericOperation, string][] = [
   ['weekendTarget', '주말·공휴일 목표 출근'], ['weekendMinimum', '주말·공휴일 최소 출근'],
 ]
 const splitFields: [NumericOperation, string][] = [
-  ['weekdayRegularTarget', '평일 정규직 목표'], ['weekdayRegularMinimum', '평일 정규직 최소'],
-  ['weekdayContractTarget', '평일 계약직 목표'], ['weekdayContractMinimum', '평일 계약직 최소'],
-  ['weekendRegularTarget', '주말 정규직 목표'], ['weekendRegularMinimum', '주말 정규직 최소'],
-  ['weekendContractTarget', '주말 계약직 목표'], ['weekendContractMinimum', '주말 계약직 최소'],
+  ['weekdayRegularTarget', '평일 일반직 업무 목표'], ['weekdayRegularMinimum', '평일 일반직 업무 최소'],
+  ['weekdayContractTarget', '평일 계약직 업무 목표'], ['weekdayContractMinimum', '평일 계약직 업무 최소'],
+  ['weekendRegularTarget', '주말 일반직 업무 목표'], ['weekendRegularMinimum', '주말 일반직 업무 최소'],
+  ['weekendContractTarget', '주말 계약직 업무 목표'], ['weekendContractMinimum', '주말 계약직 업무 최소'],
 ]
 const ruleFields: [NumericOperation, string, string][] = [
   ['minimumEmployeesForGeneration', '자동 편성 최소 재직 인원', '명'],
@@ -32,7 +32,7 @@ const priorityFields: [NumericOperation, string][] = [
   ['shiftRotationWeight', '전월 연계 오픈·마감 순환'], ['openCloseBalanceWeight', '일별 오픈·마감 인원 균형'],
 ]
 const priorityRows: { key: RulePriorityKey; title: string; status: (operations: Operations, settings: Settings, activeCount: number, contractCount: number) => string; detail: (operations: Operations, settings: Settings) => string }[] = [
-  { key: 'minimumStaffing', title: '일일 최소 인원', status: (o) => (o.staffingMode === 'combined' ? o.weekdayMinimum > 0 || o.weekendMinimum > 0 : o.weekdayRegularMinimum + o.weekdayContractMinimum + o.weekendRegularMinimum + o.weekendContractMinimum > 0) ? '켜짐' : '꺼짐', detail: o => o.staffingMode === 'combined' ? `평일 ${o.weekdayMinimum}명 · 주말 ${o.weekendMinimum}명` : '정규직·계약직 기준 적용' },
+  { key: 'minimumStaffing', title: '일일 최소 인원', status: (o) => (o.staffingMode === 'combined' ? o.weekdayMinimum > 0 || o.weekendMinimum > 0 : o.weekdayRegularMinimum + o.weekdayContractMinimum + o.weekendRegularMinimum + o.weekendContractMinimum > 0) ? '켜짐' : '꺼짐', detail: o => o.staffingMode === 'combined' ? `평일 ${o.weekdayMinimum}명 · 주말 ${o.weekendMinimum}명` : '담당 직무별 기준 적용' },
   { key: 'regularCoverage', title: '정규직 오픈·마감 배치', status: o => o.requireRegularEachShift ? '켜짐' : '꺼짐', detail: () => '하루 정규직 1명 이상 근무 · 오픈·마감은 가능한 범위' },
   { key: 'weekendRegularFullShift', title: '주말 정규직 종일근무', status: o => o.weekendRegularFullShift ? '켜짐' : '꺼짐', detail: () => '선택 배정 · 날짜별 최대 1명 · 직원별 주 1회 · 평일 종일 금지' },
   { key: 'monthlyRest', title: '월 기준 휴무 일수', status: () => '켜짐', detail: o => o.monthlyRestMode === 'fixed' ? `매월 ${o.monthlyRestDays}일` : '주말·공휴일 수에 맞춤' },
@@ -79,7 +79,7 @@ export function SettingsPage({ app }: { app: AppState }) {
   const monthHolidays = holidays.filter(item => item.date.startsWith(key))
   const monthExceptions = settings.produceOpenExceptions.filter(date => date.startsWith(`${key}-`))
   const fixedRuleEmployees = activeEmployees.filter(employee => Boolean(employee.workRules && ((employee.workRules.offRules?.length ?? 0) > 0 || employee.workRules.allowedShifts.length < 2))).length
-  const activeContractEmployees = activeEmployees.filter(employee => employee.employmentType === '계약직').length
+  const activeContractEmployees = activeEmployees.filter(employee => employee.dutyType === 'support').length
   const sortedPriorityRows = [...priorityRows].sort((a, b) => ops.rulePriorities[a.key] - ops.rulePriorities[b.key] || a.title.localeCompare(b.title, 'ko'))
   const nameOf = (id: number) => employees.find(employee => employee.id === id)?.name ?? '직원'
   const save = async () => { await saveSettings(settings); setDirty(false) }
@@ -114,7 +114,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <label className="field">인원 산정 방식
           <select value={ops.staffingMode} onChange={event => setOp('staffingMode', event.target.value as Operations['staffingMode'])}>
             <option value="combined">전체 직원 합산</option>
-            <option value="employmentType">정규직·계약직 별도 산정</option>
+            <option value="employmentType">담당 직무별 별도 산정</option>
           </select>
         </label>
         <div className="number-grid">
@@ -122,7 +122,7 @@ export function SettingsPage({ app }: { app: AppState }) {
             <span className="unit"><input type="number" min={0} max={100} value={ops[field]} onChange={event => setOp(field, Number(event.target.value))}/>명</span>
           </label>)}
         </div>
-        <p className="muted small">최소 인원은 같은 구분의 목표 인원보다 클 수 없습니다.</p>
+        <p className="muted small">직무별 산정은 직원의 담당 직무를 기준으로 합니다. 계약직이라도 일반직 업무를 맡으면 일반직 업무 인원으로 산정하며, 기타 직무는 어느 쪽에도 포함하지 않습니다. 근무시간과 정규직 오픈·마감 및 종일근무 조건은 채용 구분을 따릅니다. 최소 인원은 같은 구분의 목표 인원보다 클 수 없습니다.</p>
       </section>
 
       <section className="panel pad settings-card-rest">

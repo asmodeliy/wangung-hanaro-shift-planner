@@ -114,8 +114,8 @@ export function EmployeeDialog({ employee, onClose, onSave, onDelete }: { employ
   </>}>
     <label className="field">직원명<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="이름 입력"/></label>
     <div className="field-row">
-      <label className="field">채용 구분<select value={employmentType} onChange={e => setEmploymentType(e.target.value as Employee['employmentType'])}><option value="정규직">일반직</option><option value="계약직">계약직</option></select></label>
-      <label className="field">담당 직무<select value={dutyType} onChange={e => setDutyType(e.target.value as DutyType)}><option value="functional">일반직</option><option value="support">계약직 업무</option><option value="other">기타</option></select></label>
+      <label className="field">채용 구분<select value={employmentType} onChange={e => setEmploymentType(e.target.value as Employee['employmentType'])}><option value="정규직">정규직</option><option value="계약직">계약직</option></select><small className="muted">고용 형태와 근무시간에 적용됩니다.</small></label>
+      <label className="field">담당 직무<select value={dutyType} onChange={e => setDutyType(e.target.value as DutyType)}><option value="functional">일반직 업무</option><option value="support">계약직 업무</option><option value="other">기타</option></select><small className="muted">직무별 최소 인원 계산에 적용됩니다.</small></label>
     </div>
     <label className="check"><input type="checkbox" checked={produceQualified} onChange={e => { setProduceQualified(e.target.checked); if (e.target.checked) setProduceBackup(false) }}/><span>농산 담당 직원</span></label>
     <label className="check"><input type="checkbox" checked={produceBackup} onChange={e => { setProduceBackup(e.target.checked); if (e.target.checked) setProduceQualified(false) }}/><span>농산 대직자 <small className="muted">담당자가 오픈할 수 없을 때 대신 오픈합니다.</small></span></label>

@@ -12,7 +12,7 @@ export function EmployeesPage({ app }: { app: AppState }) {
     </header>
     <section className="panel pad">
       <div className="section-head">
-        <div><h2>직원 명단 <span className="count">{employees.length}</span></h2><p className="muted small">재직 {activeEmployees.length}명 · 채용 구분과 농산 담당 여부를 바탕으로 편성 조건이 적용됩니다.</p></div>
+        <div><h2>직원 명단 <span className="count">{employees.length}</span></h2><p className="muted small">재직 {activeEmployees.length}명 · 채용 구분은 고용 형태, 담당 직무는 인원 산정에 사용됩니다.</p></div>
         <label className="search"><span aria-hidden="true">⌕</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="이름 검색" aria-label="직원 이름 검색"/></label>
       </div>
       {employees.length === 0
@@ -29,6 +29,7 @@ export function EmployeesPage({ app }: { app: AppState }) {
               <small>{employee.notes || '메모 없음'}</small>
             </span>
             <span className="tag">{employmentLabel(employee)}</span>
+            <span className="tag">{employee.dutyType === 'functional' ? '일반직 업무' : employee.dutyType === 'support' ? '계약직 업무' : '기타 업무'}</span>
             <span className={`tag ${isActive(employee) ? 'tag-open' : 'tag-off'}`}>{isActive(employee) ? '재직' : '퇴사'}</span>
             <span className={`account ${account ? 'is-ready' : ''}`}><i aria-hidden="true"/>{account ? account.username : '계정 없음'}</span>
             <span className="people-actions">
