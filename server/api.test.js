@@ -43,6 +43,15 @@ test('invalid calendar dates return 400', async () => {
   assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date: '2026-02-30', code: 'off' })).status, 400)
   assert.equal((await call('/api/requests', 'POST', { employeeId: 1, dates: ['2026-02-30'] })).status, 400)
 })
+test('관리자는 확인 항목을 검토한 뒤에만 근무표를 확정할 수 있다', async () => {
+  const month = '2099-12'
+  const first = await call('/api/shifts/confirm', 'POST', { month })
+  assert.equal(first.status, 409)
+  assert.ok(first.data.problems.length)
+  assert.equal((await call('/api/shifts/confirm', 'POST', { month, acknowledgement: 'invalid' })).status, 409)
+  assert.equal((await call('/api/shifts/confirm', 'POST', { month, acknowledgement: first.data.acknowledgement })).status, 200)
+  assert.ok((await call('/api/settings')).data.confirmedMonths.includes(month))
+})
 test('store duties are saved by date and split into morning and afternoon', async () => {
   const date = '2026-11-03'
   const morning = await call(`/api/store-duties/${date}`, 'PUT', { period: 'morning', employeeId: 1 })

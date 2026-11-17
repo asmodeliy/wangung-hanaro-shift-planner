@@ -4,13 +4,14 @@ import { monthKey, monthLabel } from '../lib/schedule'
 import { Icon } from '../components/Icon'
 import { MonthCalendar, MonthTable, WeekCards, WeekTable } from '../components/ScheduleViews'
 import { ExportDialog, type ExportFormat } from '../components/ScheduleDialogs'
+import { Modal } from '../components/Modal'
 
 const closeMenu = (event: MouseEvent<HTMLElement>) => event.currentTarget.closest('details')?.removeAttribute('open')
 
 export function SchedulePage({ app }: { app: AppState }) {
   const {
     user, isAdmin, month, viewMode, changeViewMode, changeMonth, goToToday, weekIndex, setWeekIndex, weekCount, weekRangeLabel,
-    generating, hasLockedShifts, lockedShiftCount, generate, lockExistingShifts, resetMonth, openScheduleHistory, confirmed, confirmSchedule,
+    generating, hasLockedShifts, lockedShiftCount, generate, lockExistingShifts, resetMonth, openScheduleHistory, confirmed, confirmSchedule, confirmReview, setConfirmReview, confirmBusy,
     referenceAvailable, setShowReference, loading, restTarget, activeEmployees, workCount, requests, settings,
     issues, visibleScheduleNotices, visibleRequestWarnings, dismissNotice, photoImport, resolvePhotoNote,
   } = app
@@ -115,9 +116,13 @@ export function SchedulePage({ app }: { app: AppState }) {
 
       <footer className="panel-foot">
         <span>{isAdmin ? '근무시간은 직원 설정을 따릅니다. 확정 전에 확인 항목을 점검해 주세요.' : '근무 변경 요청은 관리자에게 전달해 주세요.'}</span>
-        {isAdmin && <button className="btn btn-primary" disabled={confirmed} onClick={() => void confirmSchedule()}>{confirmed ? '확정됨' : `${monthKey(month).slice(5)}월 근무표 확정`}<Icon name="arrow" size={16}/></button>}
+        {isAdmin && <button className="btn btn-primary" disabled={confirmed || confirmBusy} onClick={() => void confirmSchedule()}>{confirmed ? '확정됨' : confirmBusy ? '확인 중…' : `${monthKey(month).slice(5)}월 근무표 확정`}<Icon name="arrow" size={16}/></button>}
       </footer>
     </section>
+    {isAdmin && confirmReview && <Modal title="확인 항목을 검토해 주세요" description={`${confirmReview.month} 근무표에 확인 항목 ${confirmReview.problems.length}건이 있습니다.`} onClose={() => { if (!confirmBusy) setConfirmReview(null) }} footer={<><button className="btn" disabled={confirmBusy} onClick={() => setConfirmReview(null)}>돌아가서 수정</button><button className="btn btn-primary" disabled={confirmBusy} onClick={() => void confirmSchedule(confirmReview)}>{confirmBusy ? '확정 중…' : '확인 후 근무표 확정'}</button></>}>
+      <p>아래 항목을 확인한 후 그대로 확정하거나 돌아가서 근무표를 수정할 수 있습니다.</p>
+      <ul>{confirmReview.problems.map((item, index) => <li key={`${item.text}:${index}`}>{item.text}</li>)}</ul>
+    </Modal>}
 
     {isAdmin && photoImport?.month === monthKey(month) && (photoImport.entries.length > 0 || photoImport.notes.length > 0) && <section className="panel pad">
       <h2>사진 근무표 반영</h2>

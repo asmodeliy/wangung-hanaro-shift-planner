@@ -36,9 +36,12 @@ export async function createOvertimeHwpxFiles(input) {
           table = setCell(table, 0, 0, `( ${Number(group.month.slice(5))} )월`)
           return setCell(table, 0, 4, group.name)
         }
+        table = setCell(table, 0, 2, '예상근무시간')
+        table = setCell(table, 0, 8, '실제근무시간')
         for (let i=0; i<11; i++) {
           const record = records[i]
           table = setCell(table, i+2, 0, record ? Number(record.date.slice(8)) : '')
+          table = setCell(table, i+2, 2, record?.expectedEnd ?? '')
           table = setCell(table, i+2, 8, record?.actualEnd ?? '')
           table = setCell(table, i+2, 9, record ? String(record.minutes / 60) : '')
         }
