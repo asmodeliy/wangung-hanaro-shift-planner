@@ -5,7 +5,8 @@
   "regions": ["sin1"],
   "functions": {
     "api/index.js": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "server/templates/**"
     }
   },
   "rewrites": [

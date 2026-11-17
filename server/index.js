@@ -11,6 +11,7 @@ import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
 import { compareAttendance, parseAttendanceWorkbook, recompareAttendance } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
+import { createOvertimeHwpxArchive } from './overtime-hwpx.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -477,6 +478,16 @@ app.post('/api/attendance/overtime-sheet', requireAdmin, async (req, res) => {
     res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(Buffer.from(buffer))
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : '시간외 근무 기록부를 만들지 못했습니다.' })
+  }
+})
+app.post('/api/attendance/overtime-hwpx', requireAdmin, async (req, res) => {
+  try {
+    const result = await createOvertimeHwpxArchive(req.body ?? {})
+    const filename = `시간외근무명령부_${req.body.from}_${req.body.to}.${result.extension}`
+    res.setHeader('Content-Disposition', `attachment; filename="overtime.${result.extension}"; filename*=UTF-8''${encodeURIComponent(filename)}`)
+    res.type(result.type).send(result.data)
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : '한글 명령부를 만들지 못했습니다.' })
   }
 })
 app.get('/api/reference-schedule', requireAdmin, async (_req, res) => {

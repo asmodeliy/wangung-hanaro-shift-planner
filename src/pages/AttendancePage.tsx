@@ -215,12 +215,12 @@ export function AttendancePage() {
     }
   }
 
-  const downloadOvertimeSheet = async (employeeId?: number) => {
+  const downloadOvertimeSheet = async (employeeId?: number, format: 'xlsx' | 'hwpx' = 'xlsx') => {
     if (!result?.overtime.length || exportBusy) return
     setExportBusy(true)
     setError('')
     try {
-      const response = await fetch('/api/attendance/overtime-sheet', {
+      const response = await fetch(format === 'hwpx' ? '/api/attendance/overtime-hwpx' : '/api/attendance/overtime-sheet', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -234,7 +234,8 @@ export function AttendancePage() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `시간외 근무 기록부_${result.from}_${result.to}.xlsx`
+      const extension = format === 'xlsx' ? 'xlsx' : response.headers.get('content-type')?.includes('application/zip') ? 'zip' : 'hwpx'
+      anchor.download = `시간외근무명령부_${result.from}_${result.to}.${extension}`
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (cause) {
@@ -293,6 +294,7 @@ export function AttendancePage() {
         <div className="section-head attendance-result-head">
           <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">근무표가 없는 날짜의 출근도 별도 확인 항목으로 표시합니다.</p></div>
           {result.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${result.overtime.length}건)`}</button>}
+          {result.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
           <div className="attendance-filters">
             <label className="field">결과 보기<select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">전체 결과</option><option value="review">확인 필요</option></select></label>
             {dates.length > 1 && <label className="field">날짜<select value={dateFilter} onChange={event => setDateFilter(event.target.value)}><option value="all">전체 기간</option>{dates.map(date => <option key={date} value={date}>{dateLabel(date)}</option>)}</select></label>}
@@ -311,7 +313,7 @@ export function AttendancePage() {
 
       {result.overtime.length > 0 && <section className="panel pad attendance-overtime-people">
         <h2>개인별 시간외 근무 기록부</h2>
-        <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 기록부 다운로드</button></li>)}</ul>
+        <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 엑셀</button><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId, 'hwpx')}>{person.employeeName} 한글</button></li>)}</ul>
       </section>}
 
       {result.unmatched.length > 0 && <section className="panel pad attendance-unmatched">
