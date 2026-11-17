@@ -1,6 +1,23 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { compareAttendance, recompareAttendance } from './attendance.js'
+import { compareAttendance, recompareAttendance, selectAttendanceMonth } from './attendance.js'
+
+test('월별 비교는 선택한 달의 실제 파일 범위와 원본 행 수만 사용한다', () => {
+  const report = { from: '2026-10-30', to: '2026-12-01', importedRows: 5, attendance: [
+    { date: '2026-10-30', rowCount: 1 },
+    { date: '2026-11-03', rowCount: 2 },
+    { date: '2026-11-16', rowCount: 1 },
+    { date: '2026-12-01', rowCount: 1 },
+  ] }
+  const selected = selectAttendanceMonth(report, '2026-11')
+  assert.equal(selected.from, '2026-11-03')
+  assert.equal(selected.to, '2026-11-16')
+  assert.equal(selected.importedRows, 3)
+  assert.equal(selected.attendance.length, 2)
+  assert.throws(() => selectAttendanceMonth(report, '2026-13'), /월/)
+  assert.throws(() => selectAttendanceMonth(report, '2027-01'), /없습니다/)
+  assert.equal(selectAttendanceMonth(report, ''), report)
+})
 
 test('attendance comparison exports scheduled overtime at the configured threshold and excludes shorter overtime', () => {
   const report = {

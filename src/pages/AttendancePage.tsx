@@ -80,6 +80,8 @@ export function AttendancePage() {
   const [graceMinutes, setGraceMinutes] = useState(5)
   const [overtimeThresholdMinutes, setOvertimeThresholdMinutes] = useState(30)
   const [overtimeRoundMinutes, setOvertimeRoundMinutes] = useState(30)
+  const [uploadMonth, setUploadMonth] = useState('')
+  const [resultMonth, setResultMonth] = useState('all')
   const [result, setResult] = useState<AttendanceResult | null>(null)
   const [reports, setReports] = useState<SavedReport[]>([])
   const [selectedReportId, setSelectedReportId] = useState('')
@@ -91,21 +93,54 @@ export function AttendancePage() {
   const [filter, setFilter] = useState<'all' | 'review'>('all')
   const [dateFilter, setDateFilter] = useState('all')
 
-  const dates = useMemo(() => [...new Set(result?.rows.map(row => row.date) ?? [])], [result])
+  const months = useMemo(() => {
+    if (!result) return []
+    const first = result.from.slice(0, 7), last = result.to.slice(0, 7)
+    const values: string[] = []
+    let year = Number(first.slice(0, 4)), month = Number(first.slice(5, 7))
+    while (`${year}-${String(month).padStart(2, '0')}` <= last && values.length < 1200) {
+      values.push(`${year}-${String(month).padStart(2, '0')}`)
+      if (++month > 12) { month = 1; year++ }
+    }
+    return values
+  }, [result])
+  const scopedResult = useMemo(() => {
+    if (!result || resultMonth === 'all') return result
+    const from = `${resultMonth}-01` > result.from ? `${resultMonth}-01` : result.from
+    const lastDay = new Date(Date.UTC(Number(resultMonth.slice(0, 4)), Number(resultMonth.slice(5, 7)), 0)).getUTCDate()
+    const end = `${resultMonth}-${lastDay}`
+    const to = end < result.to ? end : result.to
+    const rows = result.rows.filter(row => row.date.startsWith(resultMonth))
+    const overtime = result.overtime.filter(row => row.date.startsWith(resultMonth))
+    const unmatched = result.unmatched.filter(row => row.date.startsWith(resultMonth))
+    const counts = {
+      compared: rows.filter(row => row.scheduledCode && row.scheduledCode !== 'off').length,
+      normal: rows.filter(row => row.severity === 'ok').length,
+      needsReview: rows.filter(row => ['warning', 'critical'].includes(row.severity)).length,
+      inProgress: rows.filter(row => row.status.includes('근무 중')).length,
+      unexpectedWork: rows.filter(row => row.status.includes('휴무일 출근') || row.status.includes('근무표 미편성')).length,
+      unmatched: unmatched.length,
+      overtime: overtime.length,
+      overtimeMinutes: overtime.reduce((sum, row) => sum + row.minutes, 0),
+    }
+    return { ...result, from, to, rows, overtime, unmatched, counts }
+  }, [result, resultMonth])
+  useEffect(() => { setResultMonth('all'); setDateFilter('all') }, [result])
+  const dates = useMemo(() => [...new Set(scopedResult?.rows.map(row => row.date) ?? [])], [scopedResult])
   const overtimePeople = useMemo(() => {
     const people = new Map<number, { employeeId: number; employeeName: string; count: number }>()
-    for (const row of result?.overtime ?? []) {
+    for (const row of scopedResult?.overtime ?? []) {
       if (row.employeeId === null) continue
       const person = people.get(row.employeeId) ?? { employeeId: row.employeeId, employeeName: row.employeeName, count: 0 }
       person.count++
       people.set(row.employeeId, person)
     }
     return [...people.values()]
-  }, [result])
-  const visibleRows = useMemo(() => (result?.rows ?? []).filter(row =>
-    (filter === 'all' || ['warning', 'critical'].includes(row.severity) || (row.overtimeMinutes > 0 && row.overtimeMinutes >= (result?.overtimeThresholdMinutes ?? 30)))
+  }, [scopedResult])
+  const visibleRows = useMemo(() => (scopedResult?.rows ?? []).filter(row =>
+    (filter === 'all' || ['warning', 'critical'].includes(row.severity) || (row.overtimeMinutes > 0 && row.overtimeMinutes >= (scopedResult?.overtimeThresholdMinutes ?? 30)))
     && (dateFilter === 'all' || row.date === dateFilter),
-  ), [result, filter, dateFilter])
+  ), [scopedResult, filter, dateFilter])
 
   const loadSavedReport = async (id?: number | string) => {
     const listResponse = await fetch('/api/attendance/reports', { credentials: 'same-origin' })
@@ -194,7 +229,7 @@ export function AttendancePage() {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`/api/attendance/compare?graceMinutes=${graceMinutes}&overtimeThresholdMinutes=${overtimeThresholdMinutes}&overtimeRoundMinutes=${overtimeRoundMinutes}`, {
+      const response = await fetch(`/api/attendance/compare?graceMinutes=${graceMinutes}&overtimeThresholdMinutes=${overtimeThresholdMinutes}&overtimeRoundMinutes=${overtimeRoundMinutes}${uploadMonth ? `&month=${encodeURIComponent(uploadMonth)}` : ''}`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
@@ -216,7 +251,7 @@ export function AttendancePage() {
   }
 
   const downloadOvertimeSheet = async (employeeId?: number, format: 'xlsx' | 'hwpx' = 'xlsx') => {
-    if (!result?.overtime.length || exportBusy) return
+    if (!scopedResult?.overtime.length || exportBusy) return
     setExportBusy(true)
     setError('')
     try {
@@ -224,7 +259,7 @@ export function AttendancePage() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: result.from, to: result.to, overtime: result.overtime, ...(employeeId === undefined ? {} : { employeeId }) }),
+        body: JSON.stringify({ from: scopedResult.from, to: scopedResult.to, overtime: scopedResult.overtime, ...(employeeId === undefined ? {} : { employeeId }) }),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { error?: string } | null
@@ -235,7 +270,7 @@ export function AttendancePage() {
       const anchor = document.createElement('a')
       anchor.href = url
       const extension = format === 'xlsx' ? 'xlsx' : response.headers.get('content-type')?.includes('application/zip') ? 'zip' : 'hwpx'
-      anchor.download = `시간외근무명령부_${result.from}_${result.to}.${extension}`
+      anchor.download = `시간외근무명령부_${scopedResult.from}_${scopedResult.to}.${extension}`
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (cause) {
@@ -255,6 +290,9 @@ export function AttendancePage() {
       <div className="attendance-controls">
         <label className="field attendance-file">근태등록 엑셀 파일
           <input type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.currentTarget.files?.[0] ?? null)}/>
+        </label>
+        <label className="field">비교할 월 <span className="muted small">선택</span>
+          <input type="month" value={uploadMonth} onChange={event => setUploadMonth(event.target.value)}/>
         </label>
         <label className="field attendance-grace">지각·조기퇴근 허용
           <span className="unit"><input type="number" min={0} max={60} value={graceMinutes} onChange={event => setGraceMinutes(Math.max(0, Math.min(60, Number(event.target.value) || 0)))}/>분</span>
@@ -276,25 +314,34 @@ export function AttendancePage() {
       {reports.length > 0 && <div className="attendance-selected"><span><b>선택한 출퇴근 기록 재비교</b><small>현재 근무표와 위의 허용 시간·시간외 기준으로 새 이력을 만듭니다.</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={!selectedReportId || loadingSaved || recompareBusy} onClick={() => void recompareSavedReport()}>{recompareBusy ? '현재 근무표로 다시 계산 중…' : '현재 근무표로 재비교'}</button></div>}
       {error && <div className="alert alert-error" role="alert"><p>{error}</p></div>}
       {loadingSaved && <p className="muted small attendance-note">저장된 근태 이력을 불러오는 중…</p>}
-      <p className="muted small attendance-note">선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. ‘근태 비교’를 누르면 결과가 저장되어 비교 이력에서 다시 열 수 있습니다. 시간외 분은 설정한 단위로 버림 처리하며 0분이면 원래 분을 유지합니다. 실제 일정이 과거 근무표와 다르면 운영 설정에서 해당 날짜를 수정 허용한 뒤 근무표를 고쳐 다시 비교하세요.</p>
+      <p className="muted small attendance-note">비교할 월을 선택하면 파일에 있는 해당 월의 첫날부터 마지막 날까지 비교합니다. 비워두면 파일의 전체 기간을 비교합니다. 파일에 없는 기간은 비교하지 않습니다. 선택한 파일은 새로고침 후에도 이 브라우저에서 이어서 사용할 수 있습니다. 시간외 분은 설정한 단위로 버림 처리하며 0분이면 원래 분을 유지합니다. 실제 일정이 과거 근무표와 다르면 운영 설정에서 해당 날짜를 수정 허용한 뒤 근무표를 고쳐 다시 비교하세요.</p>
     </section>
 
-    {result && <>
+    {scopedResult && <>
+      <section className="panel pad attendance-month-select">
+        <label className="field">결과를 월별로 보기
+          <select value={resultMonth} onChange={event => { setResultMonth(event.target.value); setDateFilter('all') }}>
+            <option value="all">전체 비교 기간</option>
+            {months.map(month => <option key={month} value={month}>{month.slice(0, 4)}년 {Number(month.slice(5))}월</option>)}
+          </select>
+        </label>
+        <p className="muted small">선택한 월의 요약, 비교 결과, 미매칭 기록과 다운로드에 동일하게 적용됩니다. 자료가 있는 비교 기간만 표시합니다.</p>
+      </section>
       <section className="attendance-summary" aria-label="근태 비교 요약">
-        <div className="panel attendance-stat"><span>비교 기간</span><strong>{result.from === result.to ? dateLabel(result.from) : `${result.from} ~ ${result.to}`}</strong><small>엑셀 {result.importedRows}행 · 근무 예정 {result.counts.compared}건</small></div>
-        <div className="panel attendance-stat"><span>정상</span><strong>{result.counts.normal}<small>건</small></strong></div>
-        <div className={`panel attendance-stat ${result.counts.needsReview ? 'has-warning' : ''}`}><span>확인 필요</span><strong>{result.counts.needsReview}<small>건</small></strong></div>
-        <div className="panel attendance-stat"><span>근무 중</span><strong>{result.counts.inProgress}<small>명</small></strong></div>
-        <div className={`panel attendance-stat ${result.counts.unexpectedWork ? 'has-warning' : ''}`}><span>예정 외 출근</span><strong>{result.counts.unexpectedWork}<small>건</small></strong></div>
-        <div className={`panel attendance-stat ${result.counts.unmatched ? 'has-warning' : ''}`}><span>직원 미매칭</span><strong>{result.counts.unmatched}<small>명</small></strong></div>
-        <div className={`panel attendance-stat ${result.counts.overtime ? 'has-warning' : ''}`}><span>시간외 근무</span><strong>{result.counts.overtime}<small>건</small></strong><small>총 {result.counts.overtimeMinutes}분</small></div>
+        <div className="panel attendance-stat"><span>비교 기간</span><strong>{scopedResult.from === scopedResult.to ? dateLabel(scopedResult.from) : `${scopedResult.from} ~ ${scopedResult.to}`}</strong><small>{resultMonth === 'all' ? `엑셀 ${scopedResult.importedRows}행 · ` : ''}근무 예정 {scopedResult.counts.compared}건</small></div>
+        <div className="panel attendance-stat"><span>정상</span><strong>{scopedResult.counts.normal}<small>건</small></strong></div>
+        <div className={`panel attendance-stat ${scopedResult.counts.needsReview ? 'has-warning' : ''}`}><span>확인 필요</span><strong>{scopedResult.counts.needsReview}<small>건</small></strong></div>
+        <div className="panel attendance-stat"><span>근무 중</span><strong>{scopedResult.counts.inProgress}<small>명</small></strong></div>
+        <div className={`panel attendance-stat ${scopedResult.counts.unexpectedWork ? 'has-warning' : ''}`}><span>예정 외 출근</span><strong>{scopedResult.counts.unexpectedWork}<small>건</small></strong></div>
+        <div className={`panel attendance-stat ${scopedResult.counts.unmatched ? 'has-warning' : ''}`}><span>직원 미매칭</span><strong>{scopedResult.counts.unmatched}<small>명</small></strong></div>
+        <div className={`panel attendance-stat ${scopedResult.counts.overtime ? 'has-warning' : ''}`}><span>시간외 근무</span><strong>{scopedResult.counts.overtime}<small>건</small></strong><small>총 {scopedResult.counts.overtimeMinutes}분</small></div>
       </section>
 
       <section className="panel attendance-results">
         <div className="section-head attendance-result-head">
           <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">근무표가 없는 날짜의 출근도 별도 확인 항목으로 표시합니다.</p></div>
-          {result.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${result.overtime.length}건)`}</button>}
-          {result.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
+          {scopedResult.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${scopedResult.overtime.length}건)`}</button>}
+          {scopedResult.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
           <div className="attendance-filters">
             <label className="field">결과 보기<select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">전체 결과</option><option value="review">확인 필요</option></select></label>
             {dates.length > 1 && <label className="field">날짜<select value={dateFilter} onChange={event => setDateFilter(event.target.value)}><option value="all">전체 기간</option>{dates.map(date => <option key={date} value={date}>{dateLabel(date)}</option>)}</select></label>}
@@ -311,15 +358,15 @@ export function AttendancePage() {
         </table></div> : <p className="attendance-empty">{filter === 'review' ? '선택한 조건에 확인할 항목이 없습니다.' : '표시할 근태 비교 결과가 없습니다.'}</p>}
       </section>
 
-      {result.overtime.length > 0 && <section className="panel pad attendance-overtime-people">
+      {scopedResult.overtime.length > 0 && <section className="panel pad attendance-overtime-people">
         <h2>개인별 시간외 근무 기록부</h2>
         <ul>{overtimePeople.map(person => <li key={person.employeeId}><span><b>{person.employeeName}</b><small>{person.count}건</small></span><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId)}>{person.employeeName} 엑셀</button><button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy} onClick={() => void downloadOvertimeSheet(person.employeeId, 'hwpx')}>{person.employeeName} 한글</button></li>)}</ul>
       </section>}
 
-      {result.unmatched.length > 0 && <section className="panel pad attendance-unmatched">
-        <h2>직원 이름 확인 <span className="count">{result.unmatched.length}</span></h2>
+      {scopedResult.unmatched.length > 0 && <section className="panel pad attendance-unmatched">
+        <h2>직원 이름 확인 <span className="count">{scopedResult.unmatched.length}</span></h2>
         <p className="muted small">근무표 직원과 이름이 일치하지 않는 지문 기록입니다. 직원 이름이 같거나 다른 경우 직원 목록과 원본 파일을 확인해 주세요.</p>
-        <ul>{result.unmatched.map((row, index) => <li key={`${row.date}:${row.name}:${index}`}><b>{row.name}</b><span>{dateLabel(row.date)} · 출근 {row.checkIn ?? '—'} · 퇴근 {row.checkOut ?? '—'}</span><small>{row.reason}</small></li>)}</ul>
+        <ul>{scopedResult.unmatched.map((row, index) => <li key={`${row.date}:${row.name}:${index}`}><b>{row.name}</b><span>{dateLabel(row.date)} · 출근 {row.checkIn ?? '—'} · 퇴근 {row.checkOut ?? '—'}</span><small>{row.reason}</small></li>)}</ul>
       </section>}
     </>}
   </>

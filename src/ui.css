@@ -150,6 +150,10 @@ ul { margin: 0; padding: 0; list-style: none; }
 .attendance-selected small { margin-top: 2px; color: var(--muted); font-size: 12px; }
 .attendance-note { margin: 0; }
 .attendance-history { max-width: 720px; }
+.attendance-month-select { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.attendance-month-select .field { min-width: 190px; }
+.attendance-month-select select, .attendance-controls input[type='month'] { min-height: 38px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); }
+.attendance-month-select p { margin: 0 0 7px; }
 .attendance-history select { width: 100%; min-height: 36px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); }
 .attendance-overtime-people { display: grid; gap: 12px; }
 .attendance-overtime-people h2 { margin: 0; font-size: 16px; }

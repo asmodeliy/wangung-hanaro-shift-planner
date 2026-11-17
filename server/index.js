@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
-import { compareAttendance, parseAttendanceWorkbook, recompareAttendance } from './attendance.js'
+import { compareAttendance, parseAttendanceWorkbook, recompareAttendance, selectAttendanceMonth } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
 import { createOvertimeHwpxArchive } from './overtime-hwpx.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
@@ -392,7 +392,7 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
   const overtimeRoundMinutes = Number(req.query.overtimeRoundMinutes ?? 30)
   if (!Number.isInteger(overtimeRoundMinutes) || overtimeRoundMinutes < 0 || overtimeRoundMinutes > 240) return res.status(400).json({ error: '시간외근무 버림 단위는 0~240분으로 설정해 주세요.' })
   let report
-  try { report = parseAttendanceWorkbook(req.body) }
+  try { report = selectAttendanceMonth(parseAttendanceWorkbook(req.body), req.query.month) }
   catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : '근태 파일을 읽지 못했습니다.' }) }
   const firstDate = new Date(`${report.from}T00:00:00Z`)
   const lastDate = new Date(`${report.to}T00:00:00Z`)

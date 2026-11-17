@@ -110,6 +110,14 @@ export function parseAttendanceWorkbook(buffer) {
 
 const minutesOfDay = time => time ? Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5)) : null
 
+export function selectAttendanceMonth(report, month) {
+  if (!month) return report
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('비교할 월을 올바르게 선택해 주세요.')
+  const attendance = report.attendance.filter(record => record.date.startsWith(`${month}-`))
+  if (!attendance.length) throw new Error('선택한 월에 해당하는 근태 기록이 파일에 없습니다.')
+  return { ...report, attendance, from: attendance[0].date, to: attendance.at(-1).date, importedRows: attendance.reduce((sum, record) => sum + (record.rowCount ?? 1), 0) }
+}
+
 export function compareAttendance({ report, employees, shifts, graceMinutes = 5, overtimeThresholdMinutes = 30, overtimeRoundMinutes = 30, now = new Date() }) {
   const employeeByName = new Map()
   for (const employee of employees) {
