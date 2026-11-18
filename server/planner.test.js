@@ -4,6 +4,33 @@ import { defaultRules, fallbackMinimumWorkersForDate, generateSchedule, isRequir
 
 const employees = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `직원${i + 1}`, employmentType: i < 3 ? '정규직' : '계약직', workRules: structuredClone(defaultRules) }))
 const base = () => ({ month: '2026-02', employees: structuredClone(employees), settings: { daysOffPairs: [{ employeeIds: [2, 7] }], operations: { weekdayTarget: 3, weekendTarget: 3, weekdayMinimum: 3, weekendMinimum: 3 } }, holidays: [] })
+test('목표 인원 상한은 고정 근무를 유지하고 남는 인력을 휴무로 편성한다', async () => {
+  const month = '2026-02'
+  const dates = monthDates(month)
+  const staff = employees.slice(0, 7)
+  const existingShifts = dates.slice(1).flatMap((date, index) => staff.flatMap((employee, i) => {
+    if (index > 0 && i >= 5) return []
+    return [{ employeeId: employee.id, date, code: i < 2 ? 'open' : i < 5 ? 'close' : 'open', locked: true }]
+  }))
+  const operations = {
+    capDailyStaffingAtTarget: true, weekdayTarget: 5, weekendTarget: 5, weekdayMinimum: 5, weekendMinimum: 5,
+    monthlyRestMode: 'fixed', monthlyRestDays: 0, noConsecutiveClose: false, noFullCloseAdjacent: false,
+    requireRegularEachShift: false, weekendRegularFullShift: false,
+  }
+  const input = { month, employees: staff, settings: { operations }, holidays: [], existingShifts, mode: 'rebalance', lockedThroughDate: '2026-01-31' }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  const workers = date => result.shifts.filter(shift => shift.date === date && shift.code !== 'off').length
+  assert.equal(workers(dates[0]), 5)
+  assert.equal(workers(dates[1]), 7)
+  assert.equal(workers(dates[2]), 5)
+  const adjacentShifts = monthDates('2026-01').map((date, index) => ({ date, employeeId: staff[0].id, code: index === 0 ? 'off' : 'open' }))
+  const validation = validateSchedule({ ...input, shifts: result.shifts, adjacentShifts })
+  assert.deepEqual(validation.stats[0].previousRest, { target: 0, off: 1, missing: 0 })
+  assert.equal(validation.stats[0].missing, 0)
+  assert.ok(validation.warnings.some(issue => issue.date === dates[1] && issue.text.includes('목표 근무인원 초과')))
+  assert.ok(validation.warnings.some(issue => issue.text.includes('기준휴무')))
+})
 function verify(input, result) {
   assert.equal(result.error, undefined)
   assert.equal(result.shifts.length, input.employees.length * monthDates(input.month).length)

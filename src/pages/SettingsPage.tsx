@@ -132,6 +132,7 @@ export function SettingsPage({ app }: { app: AppState }) {
 
       <section className="panel pad settings-card-staffing">
         <h2>인원 기준</h2>
+        <label className="check"><input type="checkbox" checked={ops.capDailyStaffingAtTarget} onChange={event => setOp('capDailyStaffingAtTarget', event.target.checked)}/><span>자동 편성에서 일일 목표 인원을 상한으로 사용 <small className="muted">기존 고정 근무는 유지하며, 직원별 기준보다 휴무가 늘어날 수 있습니다.</small></span></label>
         <label className="field">인원 산정 방식
           <select value={ops.staffingMode} onChange={event => setOp('staffingMode', event.target.value as Operations['staffingMode'])}>
             <option value="combined">전체 직원 합산</option>

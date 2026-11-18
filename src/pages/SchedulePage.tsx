@@ -10,6 +10,30 @@ import type { StoreDuty } from '../types'
 
 const closeMenu = (event: MouseEvent<HTMLElement>) => event.currentTarget.closest('details')?.removeAttribute('open')
 
+function RestSummary({ app }: { app: AppState }) {
+  const previous = new Date(app.month.getFullYear(), app.month.getMonth() - 1, 1)
+  const describe = (rest: { target: number; off: number; missing?: number } | undefined) => {
+    if (rest?.missing === undefined) return '—'
+    if (rest.missing) return `배정 ${rest.off}일 / 기준 ${rest.target}일 · 미편성 ${rest.missing}일`
+    const diff = rest.off - rest.target
+    const status = diff > 0 ? `초과 ${diff}일` : diff < 0 ? `부족 ${-diff}일` : '기준 충족'
+    return `배정 ${rest.off}일 / 기준 ${rest.target}일 · ${status}`
+  }
+  return <details className="panel pad">
+    <summary><b>직원별 휴무 현황</b></summary>
+    <div className="attendance-table-wrap">
+      <table className="attendance-table">
+        <thead><tr><th scope="col">직원</th><th scope="col">{monthLabel(previous)}</th><th scope="col">{monthLabel(app.month)}</th></tr></thead>
+        <tbody>{app.activeEmployees.map(employee => {
+          const stat = app.employeeStats.get(employee.id)
+          return <tr key={employee.id}><th scope="row">{employee.name}</th><td>{describe(stat?.previousRest)}</td><td>{describe(stat)}</td></tr>
+        })}</tbody>
+      </table>
+    </div>
+    <p className="muted small">근무표에 배정된 휴무 기준입니다. 앞달 휴무 차이는 각 월 기준에 이월하지 않습니다.</p>
+  </details>
+}
+
 export function SchedulePage({ app }: { app: AppState }) {
   const {
     user, isAdmin, month, viewMode, changeViewMode, changeMonth, goToToday, weekIndex, setWeekIndex, weekCount, weekRangeLabel,
@@ -107,7 +131,7 @@ export function SchedulePage({ app }: { app: AppState }) {
         <div><dt>재직 직원</dt><dd>{activeEmployees.length}<small>명</small></dd></div>
         <div><dt>배정 근무</dt><dd>{workCount}<small>건</small></dd></div>
         <div><dt>휴무 신청</dt><dd>{requests.length}<small>건</small></dd></div>
-        <div><dt>평일 · 주말 목표</dt><dd>{settings.operations.weekdayTarget}<small> · </small>{settings.operations.weekendTarget}<small>명</small></dd></div>
+        <div><dt>평일 · 휴일 목표</dt><dd>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekdayRegularTarget + settings.operations.weekdayContractTarget : settings.operations.weekdayTarget}<small> · </small>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekendRegularTarget + settings.operations.weekendContractTarget : settings.operations.weekendTarget}<small>명</small></dd></div>
       </dl>}
 
       <ul className="legend" aria-label="범례">
@@ -138,6 +162,7 @@ export function SchedulePage({ app }: { app: AppState }) {
         {isAdmin && <button className="btn btn-primary" disabled={confirmed || confirmBusy} onClick={() => void confirmSchedule()}>{confirmed ? '확정됨' : confirmBusy ? '확인 중…' : `${monthKey(month).slice(5)}월 근무표 확정`}<Icon name="arrow" size={16}/></button>}
       </footer>
     </section>
+    {isAdmin && !loading && <RestSummary key={monthKey(month)} app={app}/>}
     {isAdmin && confirmReview && <Modal title="확인 항목을 검토해 주세요" description={`${confirmReview.month} 근무표에 확인 항목 ${confirmReview.problems.length}건이 있습니다.`} onClose={() => { if (!confirmBusy) setConfirmReview(null) }} footer={<><button className="btn" disabled={confirmBusy} onClick={() => setConfirmReview(null)}>돌아가서 수정</button><button className="btn btn-primary" disabled={confirmBusy} onClick={() => void confirmSchedule(confirmReview)}>{confirmBusy ? '확정 중…' : '확인 후 근무표 확정'}</button></>}>
       <p>아래 항목을 확인한 후 그대로 확정하거나 돌아가서 근무표를 수정할 수 있습니다.</p>
       <ul>{confirmReview.problems.map((item, index) => <li key={`${item.text}:${index}`}>{item.text}</li>)}</ul>
