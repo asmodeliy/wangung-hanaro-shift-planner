@@ -11,6 +11,7 @@ import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
 import { applyActualShifts, compareAttendance, parseAttendanceWorkbook, recompareAttendance, selectAttendanceMonth } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
+import { assignStoreDuties, dutyGroups, dutyPeriods, eligibleStoreDuty } from './store-duty.js'
 import { createOvertimeHwpxArchive } from './overtime-hwpx.js'
 import { confirmationToken } from './confirmation.js'
 import { defaultRules, defaultOperationRules, defaultRulePriorities, normalizeRules, validDate, monthDates, weekDates, restTarget, validateSchedule, seoulDateKey } from './planner.js'
@@ -31,7 +32,9 @@ const defaultSettings = {
     open: { regular: { start: '08:00', end: '17:00' }, contract: { start: '08:30', end: '17:30' } },
     close: { regular: { start: '11:00', end: '20:00' }, contract: { start: '11:00', end: '20:00' } },
     produceOpen: { start: '08:00', end: '17:00' },
+    compose: { start: '09:30', end: '18:30' },
   },
+  storeDutyGroups: { office: [], compose: [], butcher: [] },
   daysOffPairs: [], additionalHolidays: [], produceOpenExceptions: [], editablePastShiftDates: [], storeDuties: {}, confirmedMonths: [], operations: { ...defaultOperationRules },
 }
 
@@ -69,6 +72,7 @@ async function readSettings() {
       open: { regular: mergeShiftTime('open', 'regular'), contract: mergeShiftTime('open', 'contract') },
       close: { regular: mergeShiftTime('close', 'regular'), contract: mergeShiftTime('close', 'contract') },
       produceOpen: { ...defaultSettings.shiftTimes.produceOpen, ...(savedTimes.produceOpen && typeof savedTimes.produceOpen === 'object' ? savedTimes.produceOpen : {}) },
+      compose: { ...defaultSettings.shiftTimes.compose, ...savedTimes.compose },
     },
     operations: { ...defaultOperationRules, ...stored.operations, rulePriorities: { ...defaultRulePriorities, ...stored.operations?.rulePriorities } },
   }
@@ -77,9 +81,11 @@ async function readSettings() {
   settings.produceOpenExceptions = Array.isArray(settings.produceOpenExceptions) ? settings.produceOpenExceptions.filter(validDate) : []
   settings.editablePastShiftDates = Array.isArray(settings.editablePastShiftDates) ? settings.editablePastShiftDates.filter(validDate) : []
   settings.storeDuties = settings.storeDuties && typeof settings.storeDuties === 'object' && !Array.isArray(settings.storeDuties) ? settings.storeDuties : {}
+  settings.storeDutyGroups = Object.fromEntries(dutyGroups.map(group => [group, Array.isArray(stored.storeDutyGroups?.[group]) ? stored.storeDutyGroups[group] : []]))
   return settings
 }
-function shiftTimesForEmployee(employmentType, code, settings, produceQualified = false, produceBackup = false) {
+function shiftTimesForEmployee(employmentType, code, settings, produceQualified = false, produceBackup = false, employeeId) {
+  if (settings.storeDutyGroups.compose.includes(employeeId)) return settings.shiftTimes.compose
   const type = employmentType === '계약직' ? 'contract' : 'regular'
   if (code === 'open' && (produceQualified || produceBackup)) return settings?.shiftTimes?.produceOpen ?? defaultSettings.shiftTimes.produceOpen
   if (code === 'full') {
@@ -393,7 +399,7 @@ function withAttendanceTimes(shifts, employees, settings) {
     const employeeId = Number(shift.employeeId)
     const employee = byId.get(employeeId)
     const times = !employee || shift.code === 'off' ? { start: null, end: null }
-      : shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
+      : shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup), employeeId)
     return { ...shift, employeeId, start: times.start, end: times.end }
   })
 }
@@ -645,20 +651,47 @@ app.delete('/api/users/employee/:employeeId', requireAdmin, async (req, res) => 
 })
 
 app.get('/api/settings', requireAdmin, async (_req, res) => res.json(await readSettings()))
+app.get('/api/settings/download', requireAdmin, async (_req, res) => {
+  const [settings, employees] = await Promise.all([readSettings(), activeEmployees()])
+  res.attachment(`운영설정_${seoulDateKey()}.json`).type('json').send(JSON.stringify({ exportedAt: new Date().toISOString(), settings, employees }, null, 2))
+})
+app.post('/api/store-duties/assign', requireAdmin, async (req, res) => {
+  const month = req.body?.month
+  if (typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '당번을 배정할 월을 확인해 주세요.' })
+  const dates = monthDates(month)
+  const result = await runTransaction(async () => {
+    await db.prepare("SELECT setting_key FROM app_settings WHERE setting_key = 'main' FOR UPDATE").get()
+    const settings = await readSettings()
+    const shifts = await db.prepare(`SELECT s.shift_date AS date, s.employee_id AS employeeId, s.code FROM shifts s
+      JOIN employees e ON e.id = s.employee_id WHERE e.active = 1 AND s.shift_date BETWEEN ? AND ?`).all(dates[0], dates.at(-1))
+    if (!shifts.some(shift => shift.code !== 'off')) return null
+    const duties = assignStoreDuties(dates, shifts, settings.storeDutyGroups)
+    Object.assign(settings.storeDuties, duties)
+    await saveSettings(settings)
+    return duties
+  })
+  if (!result) return res.status(400).json({ error: '근무표에 오픈·마감 또는 종일 근무를 먼저 배정해 주세요.' })
+  res.json(result)
+})
 app.put('/api/store-duties/:date', requireAdmin, async (req, res) => {
   const { date } = req.params
   const { period, employeeId } = req.body ?? {}
-  if (!validDate(date) || !['morning', 'afternoon'].includes(period)) return res.status(400).json({ error: '당번 날짜와 오전·오후를 확인해 주세요.' })
+  if (!validDate(date) || !dutyPeriods.includes(period)) return res.status(400).json({ error: '당번 날짜와 오전·오후를 확인해 주세요.' })
   const id = employeeId === null ? null : Number(employeeId)
   if (id !== null && (!Number.isInteger(id) || !await db.prepare('SELECT 1 FROM employees WHERE id = ? AND active = 1').get(id))) return res.status(400).json({ error: '재직 중인 직원을 선택해 주세요.' })
   let duty
   await db.transaction(async () => {
     await db.prepare('SELECT setting_key FROM app_settings WHERE setting_key = ? FOR UPDATE').get('main')
     const settings = await readSettings()
+    if (id !== null) {
+      const shift = await db.prepare('SELECT code FROM shifts WHERE employee_id = ? AND shift_date = ?').get(id, date)
+      if (settings.storeDutyGroups.butcher.includes(id) || !eligibleStoreDuty(shift?.code, period)) return
+    }
     duty = { morning: null, afternoon: null, ...settings.storeDuties[date], [period]: id }
     settings.storeDuties[date] = duty
     await saveSettings(settings)
   })()
+  if (!duty) return res.status(400).json({ error: '해당 시간대에 근무하는 정육 담당 외 직원을 선택해 주세요.' })
   res.json(duty)
 })
 app.put('/api/settings', requireAdmin, async (req, res) => {
@@ -672,10 +705,18 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
       if (!timePattern.test(String(time?.start ?? '')) || !timePattern.test(String(time?.end ?? ''))) return res.status(400).json({ error: '근무시간을 확인해 주세요.' })
       shiftTimes[shift][type] = { start: time.start, end: time.end }
     }
-    const produceOpen = incoming.shiftTimes.produceOpen ?? shiftTimes.produceOpen
-    if (!timePattern.test(String(produceOpen?.start ?? '')) || !timePattern.test(String(produceOpen?.end ?? ''))) return res.status(400).json({ error: '농산 오픈 근무시간을 확인해 주세요.' })
-    shiftTimes.produceOpen = { start: produceOpen.start, end: produceOpen.end }
+    for (const kind of ['produceOpen', 'compose']) {
+      const time = incoming.shiftTimes[kind] ?? shiftTimes[kind]
+      if (!timePattern.test(String(time?.start ?? '')) || !timePattern.test(String(time?.end ?? ''))) return res.status(400).json({ error: '농산 오픈 또는 컴포즈 근무시간을 확인해 주세요.' })
+      shiftTimes[kind] = { start: time.start, end: time.end }
+    }
     settings.shiftTimes = shiftTimes
+  }
+  if (incoming.storeDutyGroups !== undefined) {
+    const ids = new Set((await activeEmployees()).map(employee => employee.id))
+    const groups = { ...settings.storeDutyGroups, ...incoming.storeDutyGroups }
+    if (dutyGroups.some(group => !Array.isArray(groups[group]) || groups[group].some(id => !Number.isSafeInteger(id)))) return res.status(400).json({ error: '매장 당번 그룹의 직원을 확인해 주세요.' })
+    settings.storeDutyGroups = Object.fromEntries(dutyGroups.map(group => [group, [...new Set(groups[group].filter(id => ids.has(id)))]]))
   }
   if (Array.isArray(incoming.daysOffPairs)) {
     const ids = new Set((await db.prepare('SELECT id FROM employees').all()).map(row => row.id))
@@ -714,9 +755,13 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, preventSimultaneousProduceRest: operations.preventSimultaneousProduceRest, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: operations.allowFullShiftGeneration, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
-  const previous = await readSettings()
-  if (JSON.stringify({ ...settings, confirmedMonths: [] }) !== JSON.stringify({ ...previous, confirmedMonths: [] })) settings.confirmedMonths = []
-  await saveSettings(settings)
+  await runTransaction(async () => {
+    await db.prepare("SELECT setting_key FROM app_settings WHERE setting_key = 'main' FOR UPDATE").get()
+    const previous = await readSettings()
+    settings.storeDuties = previous.storeDuties
+    settings.confirmedMonths = JSON.stringify({ ...settings, confirmedMonths: [] }) === JSON.stringify({ ...previous, confirmedMonths: [] }) ? previous.confirmedMonths : []
+    await saveSettings(settings)
+  })
   res.json(settings)
 })
 
@@ -752,6 +797,7 @@ async function exportPayload(req) {
     { label: '오픈(정규직)', ...times.open.regular }, { label: '오픈(계약직)', ...times.open.contract },
     { label: '마감(정규직)', ...times.close.regular }, { label: '마감(계약직)', ...times.close.contract },
     { label: '농산 오픈', ...times.produceOpen },
+    ...(settings.storeDutyGroups.compose.length ? [{ label: '컴포즈', ...times.compose }] : []),
   ]
   const label = layout === 'calendar' ? '달력' : '월표'
   const base = `${actual ? '실근무표' : '근무표'}_${label}_${months.length === 1 ? months[0] : `${months[0]}_${months.at(-1)}`}`
@@ -787,7 +833,7 @@ app.get('/api/shifts', async (req, res) => {
   if (req.user.role === 'admin') return res.json(rows.map(row => ({ ...row, locked: Boolean(row.locked) })))
   const settings = await readSettings()
   res.json(rows.map(({ employmentType, produceQualified, produceBackup, locked, ...row }) => {
-    const times = row.code === 'off' ? null : shiftTimesForEmployee(employmentType, row.code, settings, Boolean(produceQualified), Boolean(produceBackup))
+    const times = row.code === 'off' ? null : shiftTimesForEmployee(employmentType, row.code, settings, Boolean(produceQualified), Boolean(produceBackup), row.employeeId)
     return { ...row, locked: Boolean(locked), start: times?.start ?? null, end: times?.end ?? null }
   }))
 })

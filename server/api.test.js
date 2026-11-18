@@ -53,7 +53,10 @@ test('관리자는 확인 항목을 검토한 뒤에만 근무표를 확정할 �
   assert.ok((await call('/api/settings')).data.confirmedMonths.includes(month))
 })
 test('store duties are saved by date and split into morning and afternoon', async () => {
-  const date = '2026-11-03'
+  const date = '2098-11-03'
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 1, date, code: 'open' })).status, 200)
+  assert.equal((await call('/api/shifts', 'PUT', { employeeId: 2, date, code: 'close' })).status, 200)
+  assert.equal((await call(`/api/store-duties/${date}`, 'PUT', { period: 'afternoon', employeeId: 1 })).status, 400)
   const morning = await call(`/api/store-duties/${date}`, 'PUT', { period: 'morning', employeeId: 1 })
   assert.equal(morning.status, 200)
   assert.equal(morning.data.morning, 1)
@@ -62,6 +65,10 @@ test('store duties are saved by date and split into morning and afternoon', asyn
   assert.equal(afternoon.status, 200)
   assert.deepEqual(afternoon.data, { morning: 1, afternoon: 2 })
   assert.equal((await call('/api/settings')).data.storeDuties[date].afternoon, 2)
+  const assigned = await call('/api/store-duties/assign', 'POST', { month: date.slice(0, 7) })
+  assert.equal(assigned.status, 200)
+  assert.deepEqual(assigned.data[date], { morning: 1, afternoon: 2 })
+  assert.deepEqual(assigned.data['2098-11-04'], { morning: null, afternoon: null })
   assert.equal((await call(`/api/store-duties/2026-02-30`, 'PUT', { period: 'morning', employeeId: 1 })).status, 400)
 })
 test('attendance comparisons are saved and can be reopened after a page reload', async () => {

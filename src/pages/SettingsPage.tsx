@@ -88,6 +88,7 @@ export function SettingsPage({ app }: { app: AppState }) {
     <header className="page-head">
       <div><h1>운영 설정</h1><p>근무시간과 일정 편성 조건을 관리합니다. 변경 후 저장을 눌러야 적용됩니다.</p></div>
       <div className="page-actions">
+        <a className="btn" href="/api/settings/download" download>저장된 설정 내려받기</a>
         {dirty && <span className="pill pill-warn">저장하지 않은 변경</span>}
         <button className="btn btn-primary" onClick={() => void save()}>설정 저장</button>
       </div>
@@ -95,7 +96,7 @@ export function SettingsPage({ app }: { app: AppState }) {
 
     <div className="settings-grid">
       <section className="panel pad settings-card-times">
-        <h2>오픈 · 마감 시간</h2>
+        <h2>근무시간</h2>
         <table className="form-table">
           <thead><tr><th>구분</th><th>직원</th><th>시작</th><th>종료</th></tr></thead>
           <tbody>
@@ -104,9 +105,29 @@ export function SettingsPage({ app }: { app: AppState }) {
                 onChange={next => update(current => ({ ...current, shiftTimes: { ...current.shiftTimes, [type]: { ...shiftTimeGroup(current, type), [kind]: next } } }))}/>))}
             <TimeRow label="농산 오픈" kind="담당·대직" value={settings.shiftTimes.produceOpen}
               onChange={next => update(current => ({ ...current, shiftTimes: { ...current.shiftTimes, produceOpen: next } }))}/>
+            <TimeRow label="컴포즈" kind="담당" value={settings.shiftTimes.compose}
+              onChange={next => update(current => ({ ...current, shiftTimes: { ...current.shiftTimes, compose: next } }))}/>
           </tbody>
         </table>
-        <p className="muted small">농산 담당·대직자는 별도 오픈 시간을 사용합니다.</p>
+        <p className="muted small">컴포즈 그룹의 근무일에는 컴포즈 시간이 적용됩니다. 농산 담당·대직자는 별도 오픈 시간을 사용합니다.</p>
+      </section>
+
+      <section className="panel pad">
+        <h2>매장 당번 그룹</h2>
+        <p className="muted small">자동 배정은 사무실 외 직원, 컴포즈 외 직원 순으로 우선합니다. 정육 담당은 당번에서 제외합니다.</p>
+        {([['office', '사무실'], ['compose', '컴포즈'], ['butcher', '정육']] as const).map(([group, label]) => <details key={group}>
+          <summary>{label} 담당 · {activeEmployees.filter(employee => settings.storeDutyGroups[group].includes(employee.id)).length}명</summary>
+          <div className="check-list">
+            {activeEmployees.map(employee => <label className="check" key={employee.id}>
+              <input type="checkbox" checked={settings.storeDutyGroups[group].includes(employee.id)} onChange={event => {
+                const checked = event.target.checked
+                update(current => ({ ...current, storeDutyGroups: { ...current.storeDutyGroups,
+                  [group]: checked ? [...current.storeDutyGroups[group], employee.id] : current.storeDutyGroups[group].filter(id => id !== employee.id),
+                } }))
+              }}/><span>{employee.name}</span>
+            </label>)}
+          </div>
+        </details>)}
       </section>
 
       <section className="panel pad settings-card-staffing">

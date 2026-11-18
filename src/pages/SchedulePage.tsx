@@ -5,6 +5,8 @@ import { Icon } from '../components/Icon'
 import { MonthCalendar, MonthTable, WeekCards, WeekTable } from '../components/ScheduleViews'
 import { ExportDialog, type ExportFormat } from '../components/ScheduleDialogs'
 import { Modal } from '../components/Modal'
+import { api } from '../lib/api'
+import type { StoreDuty } from '../types'
 
 const closeMenu = (event: MouseEvent<HTMLElement>) => event.currentTarget.closest('details')?.removeAttribute('open')
 
@@ -16,6 +18,22 @@ export function SchedulePage({ app }: { app: AppState }) {
     issues, visibleScheduleNotices, visibleRequestWarnings, dismissNotice, photoImport, resolvePhotoNote,
   } = app
   const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null)
+  const [dutyDialog, setDutyDialog] = useState(false)
+  const [assigningDuty, setAssigningDuty] = useState(false)
+  const assignDuties = async () => {
+    setAssigningDuty(true)
+    app.setError('')
+    try {
+      const duties = await api<Record<string, StoreDuty>>('/api/store-duties/assign', { method: 'POST', body: JSON.stringify({ month: monthKey(month) }) })
+      app.setSettings(current => ({ ...current, storeDuties: { ...current.storeDuties, ...duties } }))
+      const assigned = Object.values(duties).flatMap(duty => [duty.morning, duty.afternoon]).filter(id => id !== null).length
+      app.toast(`매장 당번 ${assigned}칸을 배정했습니다. 미정 ${Object.keys(duties).length * 2 - assigned}칸`)
+      setDutyDialog(false)
+    } catch (error) {
+      setDutyDialog(false)
+      app.setError(error instanceof Error ? error.message : '매장 당번을 배정하지 못했습니다.')
+    } finally { setAssigningDuty(false) }
+  }
   const noticeCount = visibleScheduleNotices.length + visibleRequestWarnings.length
   const title = isAdmin ? '월간 근무표' : `${user?.employeeName ?? '내'} 근무 일정`
   const subtitle = isAdmin ? '희망휴무와 운영 조건을 확인하며 이번 달 일정을 완성하세요.' : '매장 근무 일정을 확인하고 희망휴무를 신청할 수 있어요.'
@@ -27,6 +45,7 @@ export function SchedulePage({ app }: { app: AppState }) {
         <button className="btn btn-ghost" onClick={() => setExportFormat('xlsx')}><Icon name="download" size={16}/>엑셀 내보내기</button>
         <button className="btn btn-ghost" onClick={() => setExportFormat('pdf')}><Icon name="print" size={16}/>PDF 내보내기</button>
         {isAdmin && <>
+          <button className="btn" disabled={loading || generating} onClick={() => setDutyDialog(true)}>매장 당번 자동 배정</button>
           <button className="btn" disabled={generating} onClick={() => void generate('fill')}>빈칸 채우기</button>
           <button className="btn btn-primary" disabled={generating || hasLockedShifts} title={hasLockedShifts ? '고정된 입력이 있어 빈칸 채우기만 사용할 수 있습니다.' : undefined} onClick={() => void generate()}>
             <Icon name="spark" size={16}/>{generating ? '편성 중…' : '전체 자동 편성'}
@@ -133,5 +152,9 @@ export function SchedulePage({ app }: { app: AppState }) {
       </li>)}</ul>
     </section>}
     {exportFormat && <ExportDialog currentMonth={monthKey(month)} initialFormat={exportFormat} allowActual={isAdmin} onClose={() => setExportFormat(null)}/>}
+    {dutyDialog && <Modal title={`${monthLabel(month)} 매장 당번 자동 배정`} onClose={() => { if (!assigningDuty) setDutyDialog(false) }}
+      footer={<><button className="btn" disabled={assigningDuty} onClick={() => setDutyDialog(false)}>취소</button><button className="btn btn-primary" disabled={assigningDuty} onClick={() => void assignDuties()}>{assigningDuty ? '배정 중…' : '이 달 당번 다시 배정'}</button></>}>
+      <p>당일 오픈·마감·종일 근무자 중에서 그룹 우선순위에 따라 오전·오후 당번을 배정합니다. 이 달에 이미 지정한 당번도 다시 배정됩니다.</p>
+    </Modal>}
   </>
 }

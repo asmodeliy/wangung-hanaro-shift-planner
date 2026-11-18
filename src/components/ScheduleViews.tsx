@@ -51,7 +51,15 @@ function TotalsCell({ app, employee, totals, compact = false }: { app: AppState;
   </td>
 }
 
-/** Readable, seven-column store-duty overview shown with the monthly matrix. */
+function dutyCandidates(app: AppState, date: string, period: 'morning' | 'afternoon') {
+  return app.activeEmployees.filter(employee => {
+    const code = app.shiftMap.get(`${employee.id}:${date}`)?.code
+    return !app.settings.storeDutyGroups.butcher.includes(employee.id)
+      && (code === 'full' || code === (period === 'morning' ? 'open' : 'close'))
+  })
+}
+
+/** Seven-column store-duty overview shown with the monthly matrix. */
 function StoreDutyMonthGrid({ app }: { app: AppState }) {
   const { month, dayCount, calendarLead, activeEmployees, settings, isAdmin, saveStoreDuty } = app
   return <section className="store-duty-month" aria-label="월별 매장 당번">
@@ -67,11 +75,13 @@ function StoreDutyMonthGrid({ app }: { app: AppState }) {
           {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
             const label = periodIndex === 0 ? '오전' : '오후'
             const selected = activeEmployees.find(employee => employee.id === duty[period])
+            const options = dutyCandidates(app, date, period)
             return <div className="store-duty-month-row" key={period}>
               <span>{label}</span>
               {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
                 <option value="">미정</option>
-                {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+                {selected && !options.includes(selected) && <option value={selected.id} disabled>{selected.name} (재배정 필요)</option>}
+                {options.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
               </select> : <strong>{selected?.name ?? '미정'}</strong>}
             </div>
           })}
@@ -173,11 +183,13 @@ export function MonthCalendar({ app }: { app: AppState }) {
             {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
               const label = periodIndex === 0 ? '오전' : '오후'
               const selected = activeEmployees.find(employee => employee.id === duty[period])
+            const options = dutyCandidates(app, date, period)
               return <div className="store-duty-row" key={period}>
                 <b>{label} 당번</b>
                 {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
                   <option value="">미정</option>
-                  {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+                  {selected && !options.includes(selected) && <option value={selected.id} disabled>{selected.name} (재배정 필요)</option>}
+                  {options.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
                 </select> : <strong>{selected?.name ?? '미정'}</strong>}
               </div>
             })}
@@ -219,11 +231,13 @@ export function WeekCards({ app }: { app: AppState }) {
             const duty = settings.storeDuties[slot.date] ?? { morning: null, afternoon: null }
             const label = periodIndex === 0 ? '오전' : '오후'
             const selected = activeEmployees.find(employee => employee.id === duty[period])
+            const options = dutyCandidates(app, slot.date, period)
             return <div className="store-duty-row" key={period}>
               <b>{label} 당번</b>
               {isAdmin ? <select aria-label={`${slot.day}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(slot.date, period, event.target.value ? Number(event.target.value) : null)}>
                 <option value="">미정</option>
-                {activeEmployees.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+                {selected && !options.includes(selected) && <option value={selected.id} disabled>{selected.name} (재배정 필요)</option>}
+                {options.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
               </select> : <strong>{selected?.name ?? '미정'}</strong>}
             </div>
           })}
