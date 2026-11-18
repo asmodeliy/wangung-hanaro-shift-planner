@@ -112,6 +112,14 @@ test('실제 근무 수정은 계획을 보존하면서 지문 퇴근과 실제 
   assert.equal(revised.overtime[0].minutes, 30)
   assert.deepEqual(revised.actualShifts, [{ employeeId: 1, date, code: 'close' }])
   assert.equal(shifts[0].code, 'open')
+  const nextDate = '2026-11-02'
+  const extended = compareAttendance({
+    report: { ...report, to: nextDate, attendance: [...report.attendance, { ...report.attendance[0], date: nextDate }] },
+    employees, shifts, actualShifts, overtimeRoundMinutes: 30,
+  })
+  assert.equal(extended.rows[0].actualShiftEdited, true)
+  assert.equal(extended.overtime[0].minutes, 30)
+  assert.equal(extended.rows[1].actualShiftEdited, false)
   const reset = recompareAttendance({ savedResult: revised, employees, shifts, actualShifts: [], overtimeRoundMinutes: 30 })
   assert.equal(reset.overtime[0].minutes, 210)
   const noPunch = compareAttendance({ report: { ...report, attendance: [] }, employees, shifts, now: new Date('2026-11-03T00:00:00Z') })

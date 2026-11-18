@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer'
 import postgres, { initializePostgres } from './postgres.js'
 import { buildScheduleWorkbook } from './export.js'
 import { buildSchedulePdf } from './exportPdf.js'
-import { compareAttendance, parseAttendanceWorkbook, recompareAttendance, selectAttendanceMonth } from './attendance.js'
+import { applyActualShifts, compareAttendance, parseAttendanceWorkbook, recompareAttendance, selectAttendanceMonth } from './attendance.js'
 import { createOvertimeWorkbook } from './overtime-export.js'
 import { createOvertimeHwpxArchive } from './overtime-hwpx.js'
 import { confirmationToken } from './confirmation.js'
@@ -384,6 +384,19 @@ app.post('/api/feedback', (req, res, next) => feedbackUpload(req, res, error => 
     res.status(502).json({ error: '피드백 메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.' })
   }
 })
+function readActualShifts(from, to) {
+  return db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM attendance_actual_shifts WHERE shift_date BETWEEN ? AND ? ORDER BY shift_date, employee_id').all(from, to)
+}
+function withAttendanceTimes(shifts, employees, settings) {
+  const byId = new Map(employees.map(employee => [Number(employee.id), employee]))
+  return shifts.map(shift => {
+    const employeeId = Number(shift.employeeId)
+    const employee = byId.get(employeeId)
+    const times = !employee || shift.code === 'off' ? { start: null, end: null }
+      : shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
+    return { ...shift, employeeId, start: times.start, end: times.end }
+  })
+}
 app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'application/octet-stream', limit: '10mb' }), async (req, res, next) => {
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: '근태 엑셀 파일을 선택해 주세요.' })
   const graceMinutes = Number(req.query.graceMinutes ?? 5)
@@ -405,13 +418,9 @@ app.post('/api/attendance/compare', requireAdmin, express.raw({ type: 'applicati
     ])
     const scheduled = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code
       FROM shifts s WHERE s.shift_date >= ? AND s.shift_date <= ? ORDER BY s.shift_date, s.employee_id`).all(report.from, report.to)
-    const shifts = scheduled.map(shift => {
-      const employee = employees.find(row => Number(row.id) === Number(shift.employeeId))
-      if (!employee || shift.code === 'off') return { ...shift, employeeId: Number(shift.employeeId), start: null, end: null }
-      const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
-      return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
-    })
-    const result = compareAttendance({ report, employees, shifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
+    const shifts = withAttendanceTimes(scheduled, employees, settings)
+    const actualShifts = withAttendanceTimes(await readActualShifts(report.from, report.to), employees, settings)
+    const result = compareAttendance({ report, employees, shifts, actualShifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
     let fileName = '근태등록 엑셀'
     try { fileName = decodeURIComponent(req.get('x-file-name') ?? fileName) } catch {}
     fileName = [...fileName].filter(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127 && character !== '/' && character !== '\\').join('').trim().slice(0, 120) || '근태등록 엑셀'
@@ -453,31 +462,35 @@ app.post('/api/attendance/reports/:id/recompare', requireAdmin, async (req, res,
     ])
     const scheduled = await db.prepare(`SELECT s.employee_id AS employeeId, s.shift_date AS date, s.code
       FROM shifts s WHERE s.shift_date >= ? AND s.shift_date <= ? ORDER BY s.shift_date, s.employee_id`).all(savedResult.from, savedResult.to)
-    const shifts = scheduled.map(shift => {
-      const employee = employees.find(row => Number(row.id) === Number(shift.employeeId))
-      if (!employee || shift.code === 'off') return { ...shift, employeeId: Number(shift.employeeId), start: null, end: null }
-      const times = shiftTimesForEmployee(employee.employmentType, shift.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
-      return { ...shift, employeeId: Number(shift.employeeId), start: times.start, end: times.end }
-    })
-    const overrides = req.body?.actualShifts ?? savedResult.actualShifts ?? []
+    const shifts = withAttendanceTimes(scheduled, employees, settings)
+    const previous = savedResult.actualShifts ?? []
+    const overrides = req.body?.actualShifts ?? previous
     if (!Array.isArray(overrides) || overrides.length > 10000) return res.status(400).json({ error: '실제 근무 수정 내용을 확인해 주세요.' })
-    const available = new Set([...savedResult.rows, ...(savedResult.actualShifts ?? [])].filter(row => row.employeeId != null).map(row => `${row.employeeId}:${row.date}`))
+    const available = new Set([...savedResult.rows, ...previous].filter(row => row.employeeId != null).map(row => `${row.employeeId}:${row.date}`))
     const seen = new Set()
-    const actualShifts = []
-    for (const item of overrides) {
+    for (const item of req.body?.actualShifts == null ? [] : overrides) {
       const key = `${item?.employeeId}:${item?.date}`
       const employee = employees.find(row => Number(row.id) === item?.employeeId)
       if (!Number.isSafeInteger(item?.employeeId) || !employee || typeof item.date !== 'string' || !validDate(item.date) || item.date < savedResult.from || item.date > savedResult.to || !['open', 'close', 'full', 'off'].includes(item.code) || !available.has(key) || seen.has(key)) return res.status(400).json({ error: '실제 근무 수정 내용에 잘못된 직원, 날짜 또는 근무가 있습니다.' })
       seen.add(key)
-      const times = item.code === 'off' ? { start: null, end: null } : shiftTimesForEmployee(employee.employmentType, item.code, settings, Boolean(employee.produceQualified), Boolean(employee.produceBackup))
-      actualShifts.push({ employeeId: item.employeeId, date: item.date, code: item.code, start: times.start, end: times.end })
     }
-    const result = recompareAttendance({ savedResult, employees, shifts, actualShifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
     const baseName = [...String(report.fileName || '근태등록 엑셀')].slice(0, 105).join('')
-    const fileName = `${baseName} · 재비교`
-    const saved = await db.prepare('INSERT INTO attendance_reports (file_name, result_json) VALUES (?, ?)').run(fileName, JSON.stringify(result))
-    await db.prepare('DELETE FROM attendance_reports WHERE id NOT IN (SELECT id FROM attendance_reports ORDER BY created_at DESC, id DESC LIMIT 24)').run()
-    res.json({ ...result, reportId: saved.lastInsertRowid, fileName })
+    const fileName = `${baseName} · ${req.body?.actualShifts == null ? '재비교' : '실근무 반영'}`
+    const saved = await runTransaction(async () => {
+      if (req.body?.actualShifts != null) {
+        const previousCodes = new Map(previous.map(item => [`${item.employeeId}:${item.date}`, item.code]))
+        const upsert = db.prepare('INSERT INTO attendance_actual_shifts (shift_date, employee_id, code) VALUES (?, ?, ?) ON CONFLICT (shift_date, employee_id) DO UPDATE SET code = excluded.code')
+        const remove = db.prepare('DELETE FROM attendance_actual_shifts WHERE shift_date = ? AND employee_id = ? AND code = ?')
+        for (const item of previous) if (!seen.has(`${item.employeeId}:${item.date}`)) await remove.run(item.date, item.employeeId, item.code)
+        for (const item of overrides) if (previousCodes.get(`${item.employeeId}:${item.date}`) !== item.code) await upsert.run(item.date, item.employeeId, item.code)
+      }
+      const actualShifts = withAttendanceTimes(await readActualShifts(savedResult.from, savedResult.to), employees, settings)
+      const result = recompareAttendance({ savedResult, employees, shifts, actualShifts, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes })
+      const record = await db.prepare('INSERT INTO attendance_reports (file_name, result_json) VALUES (?, ?)').run(fileName, JSON.stringify(result))
+      await db.prepare('DELETE FROM attendance_reports WHERE id NOT IN (SELECT id FROM attendance_reports ORDER BY created_at DESC, id DESC LIMIT 24)').run()
+      return { ...result, reportId: record.lastInsertRowid, fileName }
+    })
+    res.json(saved)
   } catch (error) { next(error) }
 })
 app.post('/api/attendance/overtime-sheet', requireAdmin, async (req, res) => {
@@ -712,23 +725,27 @@ app.get('/api/holidays', async (req, res) => {
   if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: '연도를 확인해 주세요.' })
   res.json(holidaysFor(year, await readSettings()))
 })
-app.get('/api/export/months', async (_req, res) => {
-  const rows = await db.prepare('SELECT DISTINCT substr(shift_date, 1, 7) AS month FROM shifts ORDER BY month').all()
+app.get('/api/export/months', async (req, res) => {
+  const rows = req.user.role === 'admin'
+    ? await db.prepare('SELECT substr(shift_date, 1, 7) AS month FROM shifts UNION SELECT substr(shift_date, 1, 7) FROM attendance_actual_shifts ORDER BY month').all()
+    : await db.prepare('SELECT DISTINCT substr(shift_date, 1, 7) AS month FROM shifts ORDER BY month').all()
   res.json(rows.map(row => row.month))
 })
 async function exportPayload(req) {
   const requested = String(req.query.months ?? '').split(',').map(item => item.trim()).filter(Boolean)
   if (!requested.length || requested.length > 24 || requested.some(month => !/^\d{4}-(0[1-9]|1[0-2])$/.test(month))) return { error: '내보낼 월을 선택해 주세요.' }
   const layout = req.query.layout === 'calendar' ? 'calendar' : 'table'
+  const actual = req.query.basis === 'actual'
   const months = [...new Set(requested)].sort()
   const settings = await readSettings()
   const employees = (await db.prepare('SELECT id, name, employment_type AS employmentType, produce_qualified AS produceQualified, produce_backup AS produceBackup, active FROM employees ORDER BY sort_order, id').all())
     .map(employee => ({ ...employee, produceQualified: Boolean(employee.produceQualified), produceBackup: Boolean(employee.produceBackup), active: Boolean(employee.active) }))
   const data = []
   for (const month of months) {
-    const shifts = await db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id').all(`${month}-01`, `${nextMonth(month)}-01`)
+    const planned = await db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id').all(`${month}-01`, `${nextMonth(month)}-01`)
+    const shifts = actual ? applyActualShifts(planned, await readActualShifts(`${month}-01`, monthDates(month).at(-1))) : planned
     const holidays = holidaysFor(Number(month.slice(0, 4)), settings).filter(item => item.date.startsWith(`${month}-`))
-    data.push({ month, employees, shifts, holidays, restTarget: restTarget(monthDates(month), holidays.map(item => item.date), settings.operations) })
+    data.push({ month, employees, shifts, holidays, actual, restTarget: restTarget(monthDates(month), holidays.map(item => item.date), settings.operations) })
   }
   const times = settings.shiftTimes
   const timeRows = [
@@ -737,7 +754,7 @@ async function exportPayload(req) {
     { label: '농산 오픈', ...times.produceOpen },
   ]
   const label = layout === 'calendar' ? '달력' : '월표'
-  const base = `근무표_${label}_${months.length === 1 ? months[0] : `${months[0]}_${months.at(-1)}`}`
+  const base = `${actual ? '실근무표' : '근무표'}_${label}_${months.length === 1 ? months[0] : `${months[0]}_${months.at(-1)}`}`
   return { months: data, layout, timeRows, base }
 }
 const sendDownload = (res, buffer, type, filename) => {
@@ -746,6 +763,7 @@ const sendDownload = (res, buffer, type, filename) => {
   res.send(buffer)
 }
 app.get('/api/export/schedule.xlsx', async (req, res, next) => {
+  if (req.query.basis === 'actual' && req.user.role !== 'admin') return res.status(403).json({ error: '관리자만 실근무표를 내보낼 수 있습니다.' })
   try {
     const payload = await exportPayload(req)
     if (payload.error) return res.status(400).json({ error: payload.error })
@@ -753,6 +771,7 @@ app.get('/api/export/schedule.xlsx', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 app.get('/api/export/schedule.pdf', async (req, res, next) => {
+  if (req.query.basis === 'actual' && req.user.role !== 'admin') return res.status(403).json({ error: '관리자만 실근무표를 내보낼 수 있습니다.' })
   try {
     const payload = await exportPayload(req)
     if (payload.error) return res.status(400).json({ error: payload.error })

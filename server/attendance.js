@@ -118,7 +118,16 @@ export function selectAttendanceMonth(report, month) {
   return { ...report, attendance, from: attendance[0].date, to: attendance.at(-1).date, importedRows: attendance.reduce((sum, record) => sum + (record.rowCount ?? 1), 0) }
 }
 
-export function compareAttendance({ report, employees, shifts, graceMinutes = 5, overtimeThresholdMinutes = 30, overtimeRoundMinutes = 30, now = new Date(), includeOffCells = new Set() }) {
+export function applyActualShifts(planned, actual) {
+  const cells = new Map(planned.map(shift => [`${shift.employeeId}:${shift.date}`, shift]))
+  for (const shift of actual) cells.set(`${shift.employeeId}:${shift.date}`, shift)
+  return [...cells.values()]
+}
+
+export function compareAttendance({ report, employees, shifts, actualShifts = [], graceMinutes = 5, overtimeThresholdMinutes = 30, overtimeRoundMinutes = 30, now = new Date() }) {
+  const planned = new Map(shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
+  const overrides = new Set(actualShifts.map(shift => `${shift.employeeId}:${shift.date}`))
+  shifts = applyActualShifts(shifts, actualShifts)
   const employeeByName = new Map()
   for (const employee of employees) {
     const key = normalizeAttendanceName(employee.name)
@@ -156,7 +165,8 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     const actualStart = actual?.checkIn ?? null
     const actualEnd = actual?.checkOut ?? null
     const hasPunch = Boolean(actualStart || actualEnd)
-    if (scheduledCode === 'off' && !hasPunch && !includeOffCells.has(`${employee?.id}:${date}`)) return
+    const key = `${employee?.id}:${date}`
+    if (scheduledCode === 'off' && !hasPunch && !overrides.has(key)) return
     if (!scheduledCode && !hasPunch) return
     let expectedStart = shift?.start ?? null
     let expectedEnd = shift?.end ?? null
@@ -218,6 +228,8 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
       employeeName: employee?.name ?? actual?.name ?? '이름 미확인',
       date,
       scheduledCode,
+      plannedCode: planned.get(key) ?? null,
+      actualShiftEdited: overrides.has(key),
       expectedStart,
       expectedEnd,
       actualStart,
@@ -260,7 +272,7 @@ export function compareAttendance({ report, employees, shifts, graceMinutes = 5,
     actualEnd: row.actualEnd,
     minutes: row.overtimeMinutes,
   }))
-  return { from: report.from, to: report.to, importedRows: report.importedRows, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes, counts, rows, overtime, unmatched }
+  return { from: report.from, to: report.to, importedRows: report.importedRows, graceMinutes, overtimeThresholdMinutes, overtimeRoundMinutes, counts, rows, overtime, unmatched, actualShifts: actualShifts.map(({ employeeId, date, code }) => ({ employeeId, date, code })) }
 }
 
 export function recompareAttendance({ savedResult, employees, shifts, actualShifts = [], graceMinutes = savedResult?.graceMinutes ?? 5, overtimeThresholdMinutes = savedResult?.overtimeThresholdMinutes ?? 30, overtimeRoundMinutes = savedResult?.overtimeRoundMinutes ?? 30, now = new Date() }) {
@@ -274,21 +286,14 @@ export function recompareAttendance({ savedResult, employees, shifts, actualShif
   for (const row of savedResult.unmatched) {
     if (row.checkIn || row.checkOut) attendance.push({ name: row.name, normalizedName: normalizeAttendanceName(row.name), date: row.date, checkIn: row.checkIn, checkOut: row.checkOut })
   }
-  const planned = new Map(shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift]))
-  const effective = new Map(planned)
-  for (const shift of actualShifts) effective.set(`${shift.employeeId}:${shift.date}`, shift)
-  const result = compareAttendance({
+  return compareAttendance({
     report: { from: savedResult.from, to: savedResult.to, importedRows: savedResult.importedRows, attendance },
     employees,
-    shifts: [...effective.values()],
-    includeOffCells: new Set(actualShifts.filter(shift => shift.code === 'off').map(shift => `${shift.employeeId}:${shift.date}`)),
+    shifts,
+    actualShifts,
     graceMinutes,
     overtimeThresholdMinutes,
     overtimeRoundMinutes,
     now,
   })
-  const overrides = new Set(actualShifts.map(shift => `${shift.employeeId}:${shift.date}`))
-  result.rows = result.rows.map(row => ({ ...row, plannedCode: planned.get(`${row.employeeId}:${row.date}`)?.code ?? null, actualShiftEdited: overrides.has(`${row.employeeId}:${row.date}`) }))
-  result.actualShifts = actualShifts.map(({ employeeId, date, code }) => ({ employeeId, date, code }))
-  return result
 }

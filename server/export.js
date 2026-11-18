@@ -33,7 +33,7 @@ export async function buildScheduleWorkbook({ months, timeRows = [], layout = 't
   return Buffer.from(await workbook.xlsx.writeBuffer())
 }
 
-function addMonthSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null }, timeRows) {
+function addMonthSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null, actual = false }, timeRows) {
   const [year, number] = month.split('-').map(Number)
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
@@ -55,7 +55,7 @@ function addMonthSheet(workbook, { month, employees, shifts, holidays = [], rest
 
   sheet.mergeCells(1, 1, 1, lastColumn)
   const title = sheet.getCell(1, 1)
-  title.value = `왕궁농협 하나로마트 ${year}년 ${number}월 근무표`
+  title.value = `왕궁농협 하나로마트 ${year}년 ${number}월 ${actual ? '실근무 반영 근무표' : '근무표'}`
   title.font = { name: 'Malgun Gothic', size: 18, bold: true, color: { argb: 'FF075B39' } }
   title.alignment = { vertical: 'middle', horizontal: 'left' }
   sheet.getRow(1).height = 32
@@ -63,6 +63,7 @@ function addMonthSheet(workbook, { month, employees, shifts, holidays = [], rest
   sheet.mergeCells(2, 1, 2, lastColumn)
   const subtitle = sheet.getCell(2, 1)
   subtitle.value = `오 오픈 · 마 마감 · 종 종일 · 휴 휴무${restTarget === null ? '' : `   |   직원별 기준 휴무 ${restTarget}일`}`
+  if (actual) subtitle.value += '   |   실근무 수정 반영 · 나머지는 계획 기준'
   subtitle.font = { name: 'Malgun Gothic', size: 10, color: { argb: 'FF6C7F74' } }
   sheet.getRow(2).height = 18
 
@@ -192,7 +193,7 @@ function addMonthSheet(workbook, { month, employees, shifts, holidays = [], rest
 const calendarNames = { open: '오픈', close: '마감', full: '종일', off: '휴무' }
 
 /** Calendar layout: seven columns, one row per week, each day lists who opens, closes, works all day and rests. */
-function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null }, timeRows) {
+function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null, actual = false }, timeRows) {
   const [year, number] = month.split('-').map(Number)
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
@@ -212,13 +213,14 @@ function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], r
   for (let column = 1; column <= 7; column++) sheet.getColumn(column).width = 22
   sheet.mergeCells(1, 1, 1, 7)
   const title = sheet.getCell(1, 1)
-  title.value = `왕궁농협 하나로마트 ${year}년 ${number}월 근무표`
+  title.value = `왕궁농협 하나로마트 ${year}년 ${number}월 ${actual ? '실근무 반영 근무표' : '근무표'}`
   title.font = { name: 'Malgun Gothic', size: 18, bold: true, color: { argb: 'FF075B39' } }
   title.alignment = { vertical: 'middle' }
   sheet.getRow(1).height = 32
   sheet.mergeCells(2, 1, 2, 7)
   const subtitle = sheet.getCell(2, 1)
   subtitle.value = restTarget === null ? '' : `직원별 기준 휴무 ${restTarget}일`
+  if (actual) subtitle.value = '실근무 수정 반영 · 나머지는 계획 기준'
   subtitle.font = { name: 'Malgun Gothic', size: 10, color: { argb: 'FF6C7F74' } }
 
   weekdayNames.forEach((label, index) => {

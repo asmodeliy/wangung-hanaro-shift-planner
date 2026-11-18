@@ -83,8 +83,9 @@ const monthText = (month: string) => `${month.slice(0, 4)}년 ${Number(month.sli
 export type ExportFormat = 'pdf' | 'xlsx'
 
 /** Choose file type, layout (month table or calendar) and months. PDF pages and Excel sheets are one per month. */
-export function ExportDialog({ currentMonth, initialFormat, onClose }: { currentMonth: string; initialFormat: ExportFormat; onClose: () => void }) {
+export function ExportDialog({ currentMonth, initialFormat, allowActual, onClose }: { currentMonth: string; initialFormat: ExportFormat; allowActual: boolean; onClose: () => void }) {
   const [format, setFormat] = useState<ExportFormat>(initialFormat)
+  const [basis, setBasis] = useState<'planned' | 'actual'>('planned')
   const [layout, setLayout] = useState<'table' | 'calendar'>('table')
   const [months, setMonths] = useState<string[] | null>(null)
   const [selected, setSelected] = useState<string[]>([currentMonth])
@@ -94,7 +95,7 @@ export function ExportDialog({ currentMonth, initialFormat, onClose }: { current
       .catch(error => setFailed(error instanceof Error ? error.message : '내보낼 월을 불러오지 못했습니다.'))
   }, [currentMonth])
   const toggle = (month: string) => setSelected(current => current.includes(month) ? current.filter(item => item !== month) : [...current, month].sort())
-  const href = `/api/export/schedule.${format}?layout=${layout}&months=${selected.join(',')}`
+  const href = `/api/export/schedule.${format}?layout=${layout}&months=${selected.join(',')}&basis=${basis}`
   const choice = <T extends string>(value: T, current: T, set: (next: T) => void, title: string, hint: string) =>
     <button type="button" className={`choice ${value === current ? 'is-selected' : ''}`} aria-pressed={value === current} onClick={() => set(value)}><b>{title}</b><small>{hint}</small></button>
   return <Modal size="sm" title="내보내기" description="A4 가로 용지에 맞춰 한 달을 한 장(한 시트)으로 만듭니다. 선택한 월마다 한 장씩 만들어집니다." onClose={onClose}
@@ -111,6 +112,12 @@ export function ExportDialog({ currentMonth, initialFormat, onClose }: { current
         {choice('xlsx', format, setFormat, '엑셀', '월마다 시트 · 수정 가능')}
       </div>
     </div>
+    {allowActual && <div className="field">근무표 기준
+      <div className="choices">
+        {choice('planned', basis, setBasis, '계획 근무표', '월간 근무표 기준')}
+        {choice('actual', basis, setBasis, '실근무 반영', '저장한 실근무를 적용 · 나머지는 계획 기준')}
+      </div>
+    </div>}
     <div className="field">보기 방식
       <div className="choices">
         {choice('table', layout, setLayout, '월 표', '직원 × 날짜 표')}

@@ -132,6 +132,6 @@ export function SchedulePage({ app }: { app: AppState }) {
         <button className="btn btn-sm" onClick={() => void resolvePhotoNote(note.id, !note.resolved)}>{note.resolved ? '되돌리기' : '확인 완료'}</button>
       </li>)}</ul>
     </section>}
-    {exportFormat && <ExportDialog currentMonth={monthKey(month)} initialFormat={exportFormat} onClose={() => setExportFormat(null)}/>}
+    {exportFormat && <ExportDialog currentMonth={monthKey(month)} initialFormat={exportFormat} allowActual={isAdmin} onClose={() => setExportFormat(null)}/>}
   </>
 }

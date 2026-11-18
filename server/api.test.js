@@ -88,6 +88,24 @@ test('attendance comparisons are saved and can be reopened after a page reload',
   assert.deepEqual(revised.data.actualShifts, [{ employeeId: 1, date: '2026-10-21', code: 'close' }])
   const reopened = await call(`/api/attendance/reports/${revised.data.reportId}`)
   assert.deepEqual(reopened.data.result.actualShifts, revised.data.actualShifts)
+  const extendedWorkbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(extendedWorkbook, XLSX.utils.aoa_to_sheet([
+    ['이름', '근무일자', '출근', '퇴근'],
+    ['테스트 직원1', '2026-10-21', '11:00', '20:45'],
+    ['테스트 직원1', '2026-10-22', '08:00', '17:45'],
+  ]), '근태')
+  const extended = await callRaw('/api/attendance/compare', 'POST', XLSX.write(extendedWorkbook, { type: 'buffer', bookType: 'xlsx' }), { 'Content-Type': 'application/octet-stream' })
+  assert.equal(extended.status, 200)
+  assert.equal(extended.data.rows.find(row => row.employeeId === 1 && row.date === '2026-10-21').scheduledCode, 'close')
+  assert.deepEqual(extended.data.actualShifts, revised.data.actualShifts)
+  const { default: ExcelJS } = await import('exceljs')
+  const exported = await fetch(`${baseUrl}/api/export/schedule.xlsx?months=2026-10&basis=actual`, { headers: { Cookie: cookie } })
+  assert.equal(exported.status, 200)
+  const actualWorkbook = new ExcelJS.Workbook()
+  await actualWorkbook.xlsx.load(Buffer.from(await exported.arrayBuffer()))
+  const actualSheet = actualWorkbook.worksheets[0]
+  assert.match(actualSheet.getCell('A1').value, /실근무 반영/)
+  assert.equal(actualSheet.getCell(5, 23).value, '마')
   assert.equal((await call(`/api/attendance/reports/${comparison.data.reportId}/recompare`, 'POST', { actualShifts: [{ employeeId: 99999, date: '2026-10-21', code: 'open' }] })).status, 400)
   const invalidRecompare = await call(`/api/attendance/reports/${comparison.data.reportId}/recompare`, 'POST', { overtimeRoundMinutes: 241 })
   assert.equal(invalidRecompare.status, 400)

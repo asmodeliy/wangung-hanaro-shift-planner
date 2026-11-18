@@ -34,10 +34,10 @@ function cell(doc, x, y, width, height, { fill = null, border = palette.line } =
   else doc.rect(x, y, width, height).stroke(border)
 }
 
-function drawHeading(doc, month, subtitle) {
+function drawHeading(doc, month, subtitle, actual) {
   const [year, number] = month.split('-').map(Number)
-  drawText(doc, `왕궁농협 하나로마트 ${year}년 ${number}월 근무표`, PAGE.margin, PAGE.margin - 2, 520, { size: 17, color: palette.green, bold: true, align: 'left' })
-  drawText(doc, subtitle, PAGE.width - PAGE.margin - 300, PAGE.margin + 4, 300, { size: 8.5, color: palette.muted, align: 'right' })
+  drawText(doc, `왕궁농협 하나로마트 ${year}년 ${number}월 ${actual ? '실근무 반영 근무표' : '근무표'}`, PAGE.margin, PAGE.margin - 2, 520, { size: 17, color: palette.green, bold: true, align: 'left' })
+  drawText(doc, actual ? '실근무 수정 반영 · 나머지는 계획 기준' : subtitle, PAGE.width - PAGE.margin - 300, PAGE.margin + 4, 300, { size: 8.5, color: palette.muted, align: 'right' })
 }
 
 function drawLegend(doc, timeRows, y) {
@@ -52,13 +52,13 @@ function tonesFor(day, holidays) {
 }
 
 function drawTablePage(doc, data, timeRows) {
-  const { month, employees, shifts, holidays = [], restTarget = null } = data
+  const { month, employees, shifts, holidays = [], restTarget = null, actual = false } = data
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
   const cells = new Map(shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
   const withShifts = new Set(shifts.map(shift => shift.employeeId))
   const rows = employees.filter(employee => employee.active !== false || withShifts.has(employee.id))
-  drawHeading(doc, month, `오 오픈 · 마 마감 · 종 종일 · 휴 휴무${restTarget === null ? '' : `   |   직원별 기준 휴무 ${restTarget}일`}`)
+  drawHeading(doc, month, `오 오픈 · 마 마감 · 종 종일 · 휴 휴무${restTarget === null ? '' : `   |   직원별 기준 휴무 ${restTarget}일`}`, actual)
 
   const left = PAGE.margin
   const top = PAGE.margin + 28
@@ -124,7 +124,7 @@ function drawTablePage(doc, data, timeRows) {
 }
 
 function drawCalendarPage(doc, data, timeRows) {
-  const { month, employees, shifts, holidays = [], restTarget = null } = data
+  const { month, employees, shifts, holidays = [], restTarget = null, actual = false } = data
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
   const byDate = new Map()
@@ -136,7 +136,7 @@ function drawCalendarPage(doc, data, timeRows) {
     entry[shift.code]?.push(shift.employeeId)
     byDate.set(shift.date, entry)
   }
-  drawHeading(doc, month, `직원별 기준 휴무 ${restTarget ?? '-'}일 · 오픈 / 마감 / 종일 / 휴무`)
+  drawHeading(doc, month, `직원별 기준 휴무 ${restTarget ?? '-'}일 · 오픈 / 마감 / 종일 / 휴무`, actual)
 
   const left = PAGE.margin
   const top = PAGE.margin + 30

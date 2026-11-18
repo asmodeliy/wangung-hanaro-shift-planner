@@ -347,6 +347,7 @@ export function AttendancePage() {
       <section className="panel attendance-results">
         <div className="section-head attendance-result-head">
           <div><h2>근태 비교 결과 <span className="count">{visibleRows.length}</span></h2><p className="muted small">계획과 실제 근무가 다르면 실제 근무를 선택하고 저장하세요. 저장하면 시간외를 다시 계산하며 계획표는 유지됩니다. 휴무일 출근은 시간외 자동 산정 대상이 아니므로 별도 확인이 필요합니다.</p></div>
+          <p className="muted small" role="status">이 비교 결과에 실근무 수정 {(scopedResult.actualShifts ?? []).filter(shift => shift.date >= scopedResult.from && shift.date <= scopedResult.to).length}건 반영</p>
           {hasUnsavedActual && <button className="btn btn-primary btn-sm" type="button" disabled={recompareBusy} onClick={() => void recompareSavedReport(actualDraft)}>{recompareBusy ? '저장 및 재계산 중…' : '실제 근무 저장 및 재계산'}</button>}
           {scopedResult.overtime.length > 0 && <button className="btn btn-primary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet()}>{exportBusy ? '기록부 만드는 중…' : `시간외 근무 기록부 엑셀 다운로드 (${scopedResult.overtime.length}건)`}</button>}
           {scopedResult.overtime.length > 0 && <button className="btn btn-secondary btn-sm" type="button" disabled={exportBusy || hasUnsavedActual} onClick={() => void downloadOvertimeSheet(undefined, 'hwpx')}>시간외근무명령부 한글 다운로드</button>}
