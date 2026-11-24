@@ -685,3 +685,14 @@ th.has-warning { box-shadow: inset 0 -3px 0 var(--yellow); }
 .choice b { font-size: 14px; }
 .choice small { color: var(--muted); }
 .choice.is-selected { border-color: var(--green); background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green); }
+
+/* ---------- Print ---------- */
+@media print {
+  .rail, .topbar, .page-actions, .toolbar .btn, .toolbar .tabs, .toolbar .stepper button, .notices, .panel-foot, .toast { display: none !important; }
+  .shell { grid-template-columns: 1fr; }
+  .main { padding: 0; }
+  .panel { border: 0; box-shadow: none; }
+  .store-duty-month { break-inside: avoid; padding: 8px 0; }
+  .store-duty, .store-duty-month article { break-inside: avoid; }
+  .store-duty-row select, .store-duty-month-row select { appearance: none; -webkit-appearance: none; border: 0; padding: 0; background: transparent; color: var(--ink); font-weight: 700; }
+}

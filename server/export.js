@@ -19,6 +19,13 @@ function monthDays(month) {
   })
 }
 
+function hasAnyStoreDuty(days, storeDuties, nameOf) {
+  return days.some(day => {
+    const duty = storeDuties[day.date]
+    return Boolean((duty?.morning != null && nameOf.has(duty.morning)) || (duty?.afternoon != null && nameOf.has(duty.afternoon)))
+  })
+}
+
 /**
  * Build one workbook with one worksheet per month.
  * `months` is [{ month: 'YYYY-MM', employees: [{ id, name, employmentType, produceQualified, produceBackup }],
@@ -33,10 +40,12 @@ export async function buildScheduleWorkbook({ months, timeRows = [], layout = 't
   return Buffer.from(await workbook.xlsx.writeBuffer())
 }
 
-function addMonthSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null, actual = false }, timeRows) {
+function addMonthSheet(workbook, { month, employees, shifts, holidays = [], storeDuties = {}, restTarget = null, actual = false }, timeRows) {
   const [year, number] = month.split('-').map(Number)
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
+  const nameOf = new Map(employees.map(employee => [employee.id, employee.name]))
+  const showStoreDuties = hasAnyStoreDuty(days, storeDuties, nameOf)
   const cellOf = new Map(shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
   const firstDayColumn = 3
   const lastDayColumn = firstDayColumn + days.length - 1
@@ -170,8 +179,37 @@ function addMonthSheet(workbook, { month, employees, shifts, holidays = [], rest
     cell.border = { ...allBorders, left: day.weekday === 1 ? medium : thin }
   })
 
+  // Store duty rows.
+  if (showStoreDuties) {
+    [['morning', '오전 당번'], ['afternoon', '오후 당번']].forEach(([period, label], periodIndex) => {
+      const dutyRowIndex = 6 + rows.length + periodIndex
+      const dutyRow = sheet.getRow(dutyRowIndex)
+      dutyRow.height = 38
+      sheet.mergeCells(dutyRowIndex, 1, dutyRowIndex, 2)
+      const dutyLabel = dutyRow.getCell(1)
+      dutyLabel.value = label
+      dutyLabel.font = { name: 'Malgun Gothic', size: 10, bold: true, color: { argb: 'FF075B39' } }
+      dutyLabel.alignment = { vertical: 'middle', horizontal: 'center' }
+      dutyLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F2' } }
+      dutyLabel.border = allBorders
+      days.forEach((day, index) => {
+        const cell = dutyRow.getCell(firstDayColumn + index)
+        const dutyId = storeDuties[day.date]?.[period]
+        const person = dutyId != null ? nameOf.get(dutyId) : null
+        const offDay = day.weekday === 0 || day.weekday === 6 || holidaySet.has(day.date)
+        if (person) cell.value = [...person].join('\n')
+        cell.font = { name: 'Malgun Gothic', size: 8, bold: true, color: { argb: 'FF22362E' } }
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
+        if (person) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7FBF8' } }
+        else if (offDay) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8F6' } }
+        cell.border = { ...allBorders, left: day.weekday === 1 ? medium : thin }
+      })
+    })
+  }
+
   // Legend with working hours.
-  let legendRow = 7 + rows.length
+  const lastDataRow = 5 + rows.length + (showStoreDuties ? 2 : 0)
+  let legendRow = lastDataRow + 2
   if (timeRows.length) {
     sheet.mergeCells(legendRow, 1, legendRow, lastColumn)
     const heading = sheet.getCell(legendRow, 1)
@@ -186,18 +224,19 @@ function addMonthSheet(workbook, { month, employees, shifts, holidays = [], rest
       legendRow++
     }
   }
-  sheet.pageSetup.printArea = `A1:${sheet.getColumn(lastColumn).letter}${Math.max(legendRow - 1, 5 + rows.length)}`
+  sheet.pageSetup.printArea = `A1:${sheet.getColumn(lastColumn).letter}${Math.max(legendRow - 1, lastDataRow)}`
 }
 
 
 const calendarNames = { open: '오픈', close: '마감', full: '종일', off: '휴무' }
 
 /** Calendar layout: seven columns, one row per week, each day lists who opens, closes, works all day and rests. */
-function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], restTarget = null, actual = false }, timeRows) {
+function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], storeDuties = {}, restTarget = null, actual = false }, timeRows) {
   const [year, number] = month.split('-').map(Number)
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
   const nameOf = new Map(employees.map(employee => [employee.id, employee.name]))
+  const showStoreDuties = hasAnyStoreDuty(days, storeDuties, nameOf)
   const order = new Map(employees.map((employee, index) => [employee.id, index]))
   const byDate = new Map()
   for (const shift of shifts) {
@@ -232,7 +271,7 @@ function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], r
     cell.border = allBorders
   })
   const weekCount = Math.ceil((days[0].weekday + days.length) / 7)
-  for (let week = 0; week < weekCount; week++) sheet.getRow(4 + week).height = 96
+  for (let week = 0; week < weekCount; week++) sheet.getRow(4 + week).height = showStoreDuties ? 110 : 96
   for (let column = 1; column <= 7; column++) for (let week = 0; week < weekCount; week++) {
     const cell = sheet.getCell(4 + week, column)
     cell.border = allBorders
@@ -244,8 +283,16 @@ function addCalendarSheet(workbook, { month, employees, shifts, holidays = [], r
     const off = day.weekday === 0 || holidaySet.has(day.date)
     const tone = off ? 'FFAD5044' : day.weekday === 6 ? 'FF276F9C' : 'FF22362E'
     const entry = byDate.get(day.date)
+    const duty = storeDuties[day.date]
+    const morning = duty?.morning != null ? nameOf.get(duty.morning) : null
+    const afternoon = duty?.afternoon != null ? nameOf.get(duty.afternoon) : null
     const richText = [{ text: `${day.day}`, font: { name: 'Malgun Gothic', size: 12, bold: true, color: { argb: tone } } }]
     if (holidaySet.has(day.date)) richText.push({ text: `  ${holidaySet.get(day.date)}`, font: { name: 'Malgun Gothic', size: 8, color: { argb: 'FFAD5044' } } })
+    if (morning || afternoon) {
+      const dutyText = [morning && `오전 ${morning}`, afternoon && `오후 ${afternoon}`].filter(Boolean).join(' · ')
+      richText.push({ text: '\n당번  ', font: { name: 'Malgun Gothic', size: 9, bold: true, color: { argb: 'FF075B39' } } })
+      richText.push({ text: dutyText, font: { name: 'Malgun Gothic', size: 9, bold: true, color: { argb: 'FF22362E' } } })
+    }
     if (entry) for (const code of ['open', 'close', 'full', 'off']) {
       const ids = [...entry[code]].sort((a, b) => order.get(a) - order.get(b))
       if (!ids.length) continue

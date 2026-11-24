@@ -791,7 +791,8 @@ async function exportPayload(req) {
     const planned = await db.prepare('SELECT employee_id AS employeeId, shift_date AS date, code FROM shifts WHERE shift_date >= ? AND shift_date < ? ORDER BY shift_date, employee_id').all(`${month}-01`, `${nextMonth(month)}-01`)
     const shifts = actual ? applyActualShifts(planned, await readActualShifts(`${month}-01`, monthDates(month).at(-1))) : planned
     const holidays = holidaysFor(Number(month.slice(0, 4)), settings).filter(item => item.date.startsWith(`${month}-`))
-    data.push({ month, employees, shifts, holidays, actual, restTarget: restTarget(monthDates(month), holidays.map(item => item.date), settings.operations) })
+    const storeDuties = Object.fromEntries(Object.entries(settings.storeDuties ?? {}).filter(([date]) => date.startsWith(`${month}-`)))
+    data.push({ month, employees, shifts, holidays, storeDuties, actual, restTarget: restTarget(monthDates(month), holidays.map(item => item.date), settings.operations) })
   }
   const times = settings.shiftTimes
   const timeRows = [

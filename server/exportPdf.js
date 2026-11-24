@@ -28,6 +28,22 @@ function drawText(doc, value, x, y, width, { size = 8, color = palette.ink, bold
   doc.text(String(value), x, top, { width, align, lineBreak: false, fill: true, stroke: bold })
 }
 
+function drawVerticalName(doc, name, x, y, width, height, color = palette.ink) {
+  const chars = [...String(name ?? '')]
+  if (!chars.length) return
+  const size = chars.length >= 4 ? 5.6 : chars.length === 3 ? 6.8 : 7.5
+  const step = Math.min(size * 1.15, (height - 4) / chars.length)
+  const startY = y + (height - step * chars.length) / 2
+  chars.forEach((char, index) => drawText(doc, char, x, startY + index * step, width, { size, color, bold: true, align: 'center' }))
+}
+
+function hasAnyStoreDuty(days, storeDuties, nameOf) {
+  return days.some(day => {
+    const duty = storeDuties[day.date]
+    return Boolean((duty?.morning != null && nameOf.has(duty.morning)) || (duty?.afternoon != null && nameOf.has(duty.afternoon)))
+  })
+}
+
 function cell(doc, x, y, width, height, { fill = null, border = palette.line } = {}) {
   doc.lineWidth(0.4)
   if (fill) doc.rect(x, y, width, height).fillAndStroke(fill, border)
@@ -52,12 +68,14 @@ function tonesFor(day, holidays) {
 }
 
 function drawTablePage(doc, data, timeRows) {
-  const { month, employees, shifts, holidays = [], restTarget = null, actual = false } = data
+  const { month, employees, shifts, holidays = [], storeDuties = {}, restTarget = null, actual = false } = data
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
+  const nameOf = new Map(employees.map(employee => [employee.id, employee.name]))
   const cells = new Map(shifts.map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
   const withShifts = new Set(shifts.map(shift => shift.employeeId))
   const rows = employees.filter(employee => employee.active !== false || withShifts.has(employee.id))
+  const showStoreDuties = hasAnyStoreDuty(days, storeDuties, nameOf)
   drawHeading(doc, month, `오 오픈 · 마 마감 · 종 종일 · 휴 휴무${restTarget === null ? '' : `   |   직원별 기준 휴무 ${restTarget}일`}`, actual)
 
   const left = PAGE.margin
@@ -65,8 +83,9 @@ function drawTablePage(doc, data, timeRows) {
   const nameW = 66, kindW = 38, totalW = 25
   const dayW = (PAGE.width - PAGE.margin * 2 - nameW - kindW - totalW * 3) / days.length
   const headH = 15
+  const dutyRowH = showStoreDuties ? 30 : 0
   const available = PAGE.height - PAGE.margin - top - 30 - headH * 2
-  const rowH = Math.max(14, Math.min(38, available / (rows.length + 1)))
+  const rowH = Math.max(13, Math.min(38, (available - dutyRowH * 2) / (rows.length + 1)))
 
   // Header
   cell(doc, left, top, nameW, headH * 2, { fill: palette.soft }); drawText(doc, '직원', left, top, nameW, { size: 9, bold: true, height: headH * 2 })
@@ -120,11 +139,28 @@ function drawTablePage(doc, data, timeRows) {
     cell(doc, x, countY, dayW, rowH, { fill: palette.greenSoft })
     drawText(doc, working, x, countY, dayW, { size: 8.5, bold: true, height: rowH })
   })
-  drawLegend(doc, timeRows, countY + rowH + 10)
+
+  if (showStoreDuties) {
+    [['morning', '오전 당번'], ['afternoon', '오후 당번']].forEach(([period, label], periodIndex) => {
+      const y = countY + rowH + periodIndex * dutyRowH
+      cell(doc, left, y, nameW + kindW, dutyRowH, { fill: palette.soft })
+      drawText(doc, label, left, y, nameW + kindW, { size: 8, color: palette.green, bold: true, height: dutyRowH })
+      days.forEach((day, index) => {
+        const x = left + nameW + kindW + index * dayW
+        const tone = tonesFor(day, holidaySet)
+        const dutyId = storeDuties[day.date]?.[period]
+        const person = dutyId != null ? nameOf.get(dutyId) : null
+        cell(doc, x, y, dayW, dutyRowH, { fill: person ? '#f7fbf8' : tone.weekend ? '#f6f8f6' : null })
+        if (day.weekday === 1) doc.lineWidth(1.1).moveTo(x, y).lineTo(x, y + dutyRowH).stroke('#5f7367')
+        if (person) drawVerticalName(doc, person, x, y, dayW, dutyRowH, palette.ink)
+      })
+    })
+  }
+  drawLegend(doc, timeRows, countY + rowH + dutyRowH * 2 + 10)
 }
 
 function drawCalendarPage(doc, data, timeRows) {
-  const { month, employees, shifts, holidays = [], restTarget = null, actual = false } = data
+  const { month, employees, shifts, holidays = [], storeDuties = {}, restTarget = null, actual = false } = data
   const days = monthDays(month)
   const holidaySet = new Map(holidays.map(item => [item.date, item.name]))
   const byDate = new Map()
@@ -159,9 +195,24 @@ function drawCalendarPage(doc, data, timeRows) {
     cell(doc, x, y, cellW, cellH, { fill: tone.weekend ? '#fbfcfb' : null })
     drawText(doc, day.day, x + 4, y + 3, 24, { size: 10, color: tone.color, bold: true, align: 'left' })
     if (holidaySet.has(day.date)) drawText(doc, holidaySet.get(day.date), x + 22, y + 5, cellW - 26, { size: 6.5, color: palette.sun, align: 'right' })
+    let cursor = y + 16.5
+    const duty = storeDuties[day.date]
+    const morning = duty?.morning != null ? nameOf.get(duty.morning) : null
+    const afternoon = duty?.afternoon != null ? nameOf.get(duty.afternoon) : null
+    if (morning || afternoon) {
+      const dutyText = [morning && `오전 ${morning}`, afternoon && `오후 ${afternoon}`].filter(Boolean).join(' · ')
+      const width = cellW - 34
+      doc.font('kr').fontSize(6.6)
+      const height = Math.max(9.5, doc.heightOfString(dutyText, { width }))
+      if (cursor + height <= y + cellH - 2) {
+        doc.roundedRect(x + 4, cursor + 0.5, 22, 9, 2).fill(palette.greenSoft)
+        drawText(doc, '당번', x + 4, cursor + 1.2, 22, { size: 6.2, color: palette.green, bold: true })
+        doc.font('kr').fontSize(6.6).fillColor(palette.ink).text(dutyText, x + 29, cursor + 1, { width, lineGap: 0.4 })
+        cursor += height + 2.5
+      }
+    }
     const entry = byDate.get(day.date)
     if (!entry) return
-    let cursor = y + 17
     for (const code of ['open', 'close', 'full', 'off']) {
       const ids = [...entry[code]].sort((a, b) => order.get(a) - order.get(b))
       if (!ids.length) continue
