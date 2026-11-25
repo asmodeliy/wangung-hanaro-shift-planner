@@ -15,22 +15,26 @@ export function ShiftCell({ app, employee, date, day, showHours = false, compact
   const frozen = pastLocked || Boolean(shift?.locked && !explicitPastEdit)
   const hours = shiftHours(employee, shift, settings, isAdmin)
   const label = shift ? shiftText[shift.code] : '미정'
+  const change = app.actualChangeMap.get(`${employee.id}:${date}`)
+  const actualLabel = change ? `계획 ${label} → 실근무 ${shiftText[change.code]}` : label
   const title = [
     shift?.locked && !explicitPastEdit ? '입력 확정 · 수정 불가' : pastLocked ? '지난 날짜 · 수정 잠금' : null,
-    label,
+    actualLabel,
     hours ? `${hours.start}–${hours.end}` : null,
     request ? `희망휴무 ${approved ? '승인' : '신청'}` : null,
   ].filter(Boolean).join(' · ')
   return <>
     <button
       type="button"
-      className={['chip', compact && 'chip-compact', shift ? `chip-${shift.code}` : 'chip-empty', request && 'has-request', approved && 'is-approved', frozen && 'is-frozen'].filter(Boolean).join(' ')}
+      className={['chip', compact && 'chip-compact', shift ? `chip-${shift.code}` : 'chip-empty', request && 'has-request', approved && 'is-approved', frozen && 'is-frozen', change && 'has-actual-change'].filter(Boolean).join(' ')}
       disabled={!isAdmin || frozen}
       title={title}
-      aria-label={`${employee.name} ${date} ${label}`}
+      aria-label={`${employee.name} ${date} ${actualLabel}`}
       onClick={() => void saveShift(employee.id, day, cycleShift(employee, date, shift))}
     >
-      <span className="chip-label">{shift ? (compact ? shiftShort[shift.code] : shiftText[shift.code]) : '·'}</span>
+      <span className="chip-label">{change
+        ? compact ? `${shift ? shiftShort[shift.code] : '·'}→${shiftShort[change.code]}` : actualLabel
+        : shift ? (compact ? shiftShort[shift.code] : shiftText[shift.code]) : '·'}</span>
       {showHours && hours && <small className="chip-hours">{hours.start}–{hours.end}</small>}
       {approved && <i className="chip-flag" aria-hidden="true">{compact ? '' : '희망'}</i>}
       {request && !approved && <i className="chip-dot" aria-hidden="true"/>}

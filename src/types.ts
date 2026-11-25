@@ -1,10 +1,11 @@
 export type Role = 'admin' | 'employee'
 export type User = { id: number; username: string; role: Role; employeeId: number | null; employeeName: string | null }
 export type WorkRules = { allowedShifts: ('open' | 'close')[]; offRules: { weekday: number; occurrences: number[] }[] }
-export type Validation = { issues: { date?: string; employeeId?: number; text: string }[]; pending: { date?: string; employeeId?: number; text: string }[]; warnings?: { date?: string; employeeId?: number; text: string }[]; stats: { employeeId: number; target: number; off: number; open: number; close: number; weekendWork?: number; longestConsecutive?: number; missing?: number; previousRest?: { target: number; off: number; missing: number } }[] }
+export type Validation = { actualShifts?: ActualShift[]; issues: { date?: string; employeeId?: number; text: string }[]; pending: { date?: string; employeeId?: number; text: string }[]; warnings?: { date?: string; employeeId?: number; text: string }[]; stats: { employeeId: number; target: number; off: number; open: number; close: number; weekendWork?: number; longestConsecutive?: number; missing?: number; previousRest?: { target: number; off: number; missing: number } }[] }
 export type Employee = { id: number; name: string; employmentType?: '정규직' | '계약직'; dutyType?: 'functional' | 'support' | 'other'; produceQualified?: boolean; produceBackup?: boolean; active: number | boolean; notes: string; workRules?: WorkRules }
 export type DutyType = NonNullable<Employee['dutyType']>
 export type ShiftCode = 'open' | 'close' | 'full' | 'off'
+export type ActualShift = Pick<Shift, 'employeeId' | 'date' | 'code'>
 export type Shift = { employeeId: number; employeeName: string; date: string; code: ShiftCode; employmentType?: Employee['employmentType']; start?: string | null; end?: string | null; locked?: boolean }
 export type DayRequest = { id: number; employeeId: number; employeeName: string; date: string; status: 'pending' | 'approved' | 'rejected' }
 export type Account = { id: number; username: string; role: Role; employeeId: number | null; employeeName: string | null }

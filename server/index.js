@@ -1016,7 +1016,8 @@ app.get('/api/shifts/validation', requireAdmin, async (req, res) => {
   const month = String(req.query.month ?? '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: '월 형식을 확인해 주세요.' })
   const input = await planningInput(month)
-  res.json(validateSchedule({ ...input, shifts: input.existingShifts }))
+  const actualShifts = await readActualShifts(`${month}-01`, monthDates(month).at(-1))
+  res.json({ ...validateSchedule({ ...input, shifts: input.existingShifts }), actualShifts })
 })
 app.post('/api/shifts/lock-existing', requireAdmin, async (req, res) => {
   const month = String(req.body?.month ?? '')

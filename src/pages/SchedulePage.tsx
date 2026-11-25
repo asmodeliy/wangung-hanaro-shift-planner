@@ -1,6 +1,6 @@
 import { useState, type MouseEvent } from 'react'
 import type { AppState } from '../hooks/useApp'
-import { monthKey, monthLabel } from '../lib/schedule'
+import { monthKey, monthLabel, shiftText } from '../lib/schedule'
 import { Icon } from '../components/Icon'
 import { MonthCalendar, MonthTable, WeekCards, WeekTable } from '../components/ScheduleViews'
 import { ExportDialog, type ExportFormat } from '../components/ScheduleDialogs'
@@ -133,6 +133,14 @@ export function SchedulePage({ app }: { app: AppState }) {
         <div><dt>휴무 신청</dt><dd>{requests.length}<small>건</small></dd></div>
         <div><dt>평일 · 휴일 목표</dt><dd>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekdayRegularTarget + settings.operations.weekdayContractTarget : settings.operations.weekdayTarget}<small> · </small>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekendRegularTarget + settings.operations.weekendContractTarget : settings.operations.weekendTarget}<small>명</small></dd></div>
       </dl>}
+
+      {isAdmin && !loading && app.actualShiftChanges.length > 0 && <details className="actual-changes" open key={monthKey(month)}>
+        <summary><b>계획과 다른 실근무 {app.actualShiftChanges.length}건</b> <small>계획 → 실근무</small></summary>
+        <ul>{app.actualShiftChanges.map(shift => <li key={`${shift.employeeId}:${shift.date}`}>
+          <span>{Number(shift.date.slice(-2))}일 · {app.employees.find(employee => employee.id === shift.employeeId)?.name ?? '직원'}</span>
+          <b>{shift.plannedCode ? shiftText[shift.plannedCode] : '미정'} → {shiftText[shift.code]}</b>
+        </li>)}</ul>
+      </details>}
 
       <ul className="legend" aria-label="범례">
         <li><span className="tag tag-open">오픈</span></li><li><span className="tag tag-close">마감</span></li>

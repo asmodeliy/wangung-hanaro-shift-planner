@@ -85,7 +85,7 @@ export type ExportFormat = 'pdf' | 'xlsx'
 /** Choose file type, layout (month table or calendar) and months. PDF pages and Excel sheets are one per month. */
 export function ExportDialog({ currentMonth, initialFormat, allowActual, onClose }: { currentMonth: string; initialFormat: ExportFormat; allowActual: boolean; onClose: () => void }) {
   const [format, setFormat] = useState<ExportFormat>(initialFormat)
-  const [basis, setBasis] = useState<'planned' | 'actual'>('planned')
+  const [basis, setBasis] = useState<'planned' | 'actual'>(allowActual ? 'actual' : 'planned')
   const [layout, setLayout] = useState<'table' | 'calendar'>('table')
   const [months, setMonths] = useState<string[] | null>(null)
   const [selected, setSelected] = useState<string[]>([currentMonth])
@@ -103,7 +103,7 @@ export function ExportDialog({ currentMonth, initialFormat, allowActual, onClose
       <span className="spacer"/>
       <button className="btn" type="button" onClick={onClose}>취소</button>
       <a className={`btn btn-primary ${selected.length ? '' : 'is-disabled'}`} href={selected.length ? href : undefined} aria-disabled={!selected.length} download onClick={() => window.setTimeout(onClose, 300)}>
-        {format === 'pdf' ? 'PDF' : '엑셀'} 파일 받기{selected.length ? ` · ${selected.length}개 월` : ''}
+        {basis === 'actual' ? '실근무 ' : ''}{format === 'pdf' ? 'PDF' : '엑셀'} 받기{selected.length ? ` · ${selected.length}개 월` : ''}
       </a>
     </>}>
     <div className="field">파일 형식
