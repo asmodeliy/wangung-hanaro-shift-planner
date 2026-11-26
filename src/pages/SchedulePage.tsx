@@ -131,7 +131,9 @@ export function SchedulePage({ app }: { app: AppState }) {
         <div><dt>재직 직원</dt><dd>{activeEmployees.length}<small>명</small></dd></div>
         <div><dt>배정 근무</dt><dd>{workCount}<small>건</small></dd></div>
         <div><dt>휴무 신청</dt><dd>{requests.length}<small>건</small></dd></div>
-        <div><dt>평일 · 휴일 목표</dt><dd>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekdayRegularTarget + settings.operations.weekdayContractTarget : settings.operations.weekdayTarget}<small> · </small>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekendRegularTarget + settings.operations.weekendContractTarget : settings.operations.weekendTarget}<small>명</small></dd></div>
+        {settings.operations.fixShiftStaffing
+          ? <div><dt>평일 · 휴일 오픈/마감</dt><dd>{settings.operations.weekdayOpenStaff}/{settings.operations.weekdayCloseStaff}<small> · </small>{settings.operations.weekendOpenStaff}/{settings.operations.weekendCloseStaff}<small>명</small></dd></div>
+          : <div><dt>평일 · 휴일 목표</dt><dd>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekdayRegularTarget + settings.operations.weekdayContractTarget : settings.operations.weekdayTarget}<small> · </small>{settings.operations.staffingMode === 'employmentType' ? settings.operations.weekendRegularTarget + settings.operations.weekendContractTarget : settings.operations.weekendTarget}<small>명</small></dd></div>}
       </dl>}
 
       {isAdmin && !loading && app.actualShiftChanges.length > 0 && <details className="actual-changes" open key={monthKey(month)}>

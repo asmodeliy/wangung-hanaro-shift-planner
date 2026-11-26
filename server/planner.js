@@ -8,6 +8,8 @@ export const defaultOperationRules = {
   monthlyRestMode: 'weekendHolidayCount', monthlyRestDays: 8,
   weekdayTarget: 5, weekendTarget: 4, weekdayMinimum: 4, weekendMinimum: 3,
   capDailyStaffingAtTarget: false,
+  fixShiftStaffing: false,
+  weekdayOpenStaff: 3, weekdayCloseStaff: 2, weekendOpenStaff: 2, weekendCloseStaff: 2,
   staffingMode: 'combined',
   weekdayRegularTarget: 2, weekdayRegularMinimum: 1, weekdayContractTarget: 3, weekdayContractMinimum: 3,
   weekendRegularTarget: 2, weekendRegularMinimum: 1, weekendContractTarget: 2, weekendContractMinimum: 2,
@@ -108,7 +110,19 @@ export function fallbackMinimumWorkersForDate(date, holidays = [], operations) {
   if (separated) return separated.reduce((sum, rule) => sum + rule.minimum, 0)
   return weekendOrHoliday(date, holidays) ? rules.weekendMinimum : rules.weekdayMinimum
 }
-export function validateSchedule({ month, employees, settings, holidays, shifts, adjacentShifts = [], adjacentHolidays = [] }) {
+function shiftStaffingTargets(date, holidays, rules) {
+  return weekendOrHoliday(date, holidays)
+    ? { open: rules.weekendOpenStaff, close: rules.weekendCloseStaff }
+    : { open: rules.weekdayOpenStaff, close: rules.weekdayCloseStaff }
+}
+function fixedScheduleCells(existingShifts, mode, lockedThroughDate) {
+  return new Map(existingShifts.filter(shift => mode === 'fill' || shift.date <= lockedThroughDate || (mode === 'rebalance' && shift.locked))
+    .map(shift => [`${shift.employeeId}:${shift.date}`, shift.code]))
+}
+function canFixShiftStaffing(date, employees, fixed, lockedThroughDate) {
+  return date > lockedThroughDate && employees.some(employee => !fixed.has(`${employee.id}:${date}`))
+}
+export function validateSchedule({ month, employees, settings, holidays, shifts, adjacentShifts = [], adjacentHolidays = [], existingShifts, mode, lockedThroughDate = '' }) {
   const dates = monthDates(month)
   const target = restTarget(dates, holidays, settings.operations)
   const entries = new Map([...adjacentShifts, ...shifts].map(s => [`${s.employeeId}:${s.date}`, s.code]))
@@ -120,6 +134,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
   const warnings = []
   const stats = []
   const rules = operationRules(settings)
+  const fixed = existingShifts ? fixedScheduleCells(existingShifts, mode, lockedThroughDate) : new Map()
   const works = code => ['open', 'close', 'full'].includes(code)
   const covers = (assigned, shift) => assigned === shift || assigned === 'full'
   const functionalEmployees = employees.filter(employee => employee.dutyType === 'functional')
@@ -131,10 +146,19 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     const workingCount = employees.filter(e => works(entries.get(`${e.id}:${date}`))).length
     const fallback = fallbackMinimumWorkersForDate(date, holidays, settings.operations)
     const preferred = minimumWorkersForDate(date, holidays, settings.operations)
-    if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
+    if (rules.fixShiftStaffing) {
+      const targets = shiftStaffingTargets(date, holidays, rules)
+      for (const code of ['open', 'close']) {
+        const count = employees.filter(employee => covers(entries.get(`${employee.id}:${date}`), code)).length
+        if (count !== targets[code]) {
+          const notices = canFixShiftStaffing(date, employees, fixed, lockedThroughDate) ? issues : warnings
+          notices.push({ date, text: `${date} ${code === 'open' ? '오픈' : '마감'} 고정 인원 불일치 (${count}명 / 기준 ${targets[code]}명)` })
+        }
+      }
+    } else if (workingCount < fallback) issues.push({ date, text: `${date} 최소 근무인원 미충족 (${workingCount}명 / 완화 기준 ${fallback}명)` })
     else if (workingCount < preferred) warnings.push({ date, text: `${date} 권장 근무인원 미달 (${workingCount}명 / 목표 ${preferred}명, 최소 운영 기준 충족)` })
     else if (rules.capDailyStaffingAtTarget && workingCount > preferred) warnings.push({ date, text: `${date} 목표 근무인원 초과 (${workingCount}명 / 목표 ${preferred}명)` })
-    for (const staffingRule of employmentStaffingRules(date, holidays, rules) ?? []) {
+    for (const staffingRule of (rules.fixShiftStaffing ? [] : employmentStaffingRules(date, holidays, rules) ?? [])) {
       const count = employees.filter(employee => staffingCategory(employee) === staffingRule.employmentType && works(entries.get(`${employee.id}:${date}`))).length
       const label = staffingRule.employmentType === '정규직' ? '일반직 업무' : '계약직 업무'
       if (count < staffingRule.minimum) issues.push({ date, text: `${date} ${label} 최소 인원 미충족 (${count}명 / 완화 기준 ${staffingRule.minimum}명)` })
@@ -221,7 +245,7 @@ export function validateSchedule({ month, employees, settings, holidays, shifts,
     stats.push({ employeeId: employee.id, target, ...counts, missing, previousRest, weekendWork, longestConsecutive })
     if (counts.off !== target) {
       const notice = { employeeId: employee.id, text: `${employee.name}: 기준휴무 ${target}일 / 배정 ${counts.off}일` }
-      if (rules.capDailyStaffingAtTarget && counts.off > target) warnings.push(notice)
+      if ((rules.fixShiftStaffing || rules.capDailyStaffingAtTarget) && counts.off > target) warnings.push(notice)
       else issues.push(notice)
     }
     for (const date of dates) {
@@ -258,7 +282,7 @@ export async function generateSchedule(input) {
   const lo = (vars, value) => add(vars, glpk.GLP_LO, value, 0)
   const up = (vars, value) => add(vars, glpk.GLP_UP, 0, value)
   const lockedThroughDate = input.lockedThroughDate ?? seoulDateKey()
-  const fixed = new Map(existingShifts.filter(s => mode === 'fill' || s.date <= lockedThroughDate || (mode === 'rebalance' && s.locked)).map(s => [`${s.employeeId}:${s.date}`, s.code]))
+  const fixed = fixedScheduleCells(existingShifts, mode, lockedThroughDate)
   // Locked input conflicts must be explained before optimization, never hidden
   // behind a greedy replacement that breaks unrelated rules.
   const fixedConflicts = []
@@ -268,6 +292,13 @@ export async function generateSchedule(input) {
     }
   }
   for (const date of dates) {
+    if (rules.fixShiftStaffing && canFixShiftStaffing(date, employees, fixed, lockedThroughDate)) {
+      const targets = shiftStaffingTargets(date, holidays, rules)
+      for (const code of ['open', 'close']) {
+        const pinned = employees.filter(employee => [code, 'full'].includes(fixed.get(`${employee.id}:${date}`))).length
+        if (pinned > targets[code]) fixedConflicts.push(`${date} ${code === 'open' ? '오픈' : '마감'} 고정 근무 ${pinned}명 / 기준 ${targets[code]}명`)
+      }
+    }
     const regulars = employees.filter(e => e.employmentType === '정규직')
     if (rules.requireRegularEachShift && regulars.length && regulars.every(e => fixed.get(`${e.id}:${date}`) === 'off')) fixedConflicts.push(`${date} 정규직 전원이 고정휴무입니다`)
     for (const employee of regulars) {
@@ -316,7 +347,7 @@ export async function generateSchedule(input) {
       if (pinned) eq([variable(employee.id, date, pinned)], 1)
       else {
         const operations = operationRules(settings)
-        const weekendFullAllowed = operations.weekendRegularFullShift && operations.allowFullShiftGeneration && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
+        const weekendFullAllowed = !rules.fixShiftStaffing && operations.weekendRegularFullShift && operations.allowFullShiftGeneration && employee.employmentType === '정규직' && [0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())
         if (!weekendFullAllowed || !['open', 'close'].every(code => employeeRules.allowedShifts.includes(code))) eq([variable(employee.id, date, 'full')], 0)
       }
       // Seeded tie-break keeps each alternative reproducible while exploring another valid arrangement.
@@ -329,13 +360,14 @@ export async function generateSchedule(input) {
     const monthlyOver = `monthly_rest_over_${employee.id}`
     const monthlyUnder = `monthly_rest_under_${employee.id}`
     const pinnedOffCount = dates.filter(date => fixed.get(`${employee.id}:${date}`) === 'off').length
-    const canExceedTarget = rules.capDailyStaffingAtTarget || pinnedOffCount > target
+    const restCanIncrease = rules.fixShiftStaffing || rules.capDailyStaffingAtTarget
+    const canExceedTarget = restCanIncrease || pinnedOffCount > target
     lp.bounds.push(
       { name: monthlyOver, type: canExceedTarget ? glpk.GLP_LO : glpk.GLP_FX, lb: 0, ub: 0 },
       { name: monthlyUnder, type: glpk.GLP_LO, lb: 0, ub: 0 },
     )
     eq([...dates.map(date => variable(employee.id, date, 'off')), { name: monthlyUnder, coef: 1 }, { name: monthlyOver, coef: -1 }], target)
-    if (!rules.capDailyStaffingAtTarget) ruleViolationSlacks.push({ name: monthlyOver, coef: 1, priorityKey: 'monthlyRest' })
+    if (!restCanIncrease) ruleViolationSlacks.push({ name: monthlyOver, coef: 1, priorityKey: 'monthlyRest' })
     ruleViolationSlacks.push({ name: monthlyUnder, coef: 1, priorityKey: 'monthlyRest' })
     for (const week of weeks) {
       const inside = week.filter(date => dates.includes(date))
@@ -487,8 +519,8 @@ export async function generateSchedule(input) {
     lo([...regulars.map(employee => variable(employee.id, date, 'close')), ...regulars.map(employee => ({ ...variable(employee.id, date, 'open'), coef: -1 })), { name: regularShiftImbalance, coef: 1 }], 0)
     const staffingShortfall = `missing_staff_${dayKey}`
     const workers = employees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code)))
-    const targetWorkers = minimumWorkersForDate(date, holidays, settings.operations)
-    if (rules.capDailyStaffingAtTarget) {
+    const targetWorkers = rules.fixShiftStaffing ? 0 : minimumWorkersForDate(date, holidays, settings.operations)
+    if (rules.capDailyStaffingAtTarget && !rules.fixShiftStaffing) {
       const fixedWorkers = employees.filter(employee => ['open', 'close', 'full'].includes(fixed.get(`${employee.id}:${date}`))).length
       up(workers, Math.max(targetWorkers, fixedWorkers))
     }
@@ -498,8 +530,8 @@ export async function generateSchedule(input) {
     const fallbackShortfall = `missing_fallback_staff_${dayKey}`
     lp.bounds.push({ name: fallbackShortfall, type: glpk.GLP_LO, lb: 0, ub: 0 })
     fallbackStaffingSlacks.push({ name: fallbackShortfall, coef: 1 })
-    lo([...employees.flatMap(employee => ['open', 'close', 'full'].map(code => variable(employee.id, date, code))), { name: fallbackShortfall, coef: 1 }], fallbackMinimumWorkersForDate(date, holidays, settings.operations))
-    for (const staffingRule of employmentStaffingRules(date, holidays, operationRules(settings)) ?? []) {
+    lo([...workers, { name: fallbackShortfall, coef: 1 }], rules.fixShiftStaffing ? 0 : fallbackMinimumWorkersForDate(date, holidays, settings.operations))
+    for (const staffingRule of (rules.fixShiftStaffing ? [] : employmentStaffingRules(date, holidays, rules) ?? [])) {
       const eligible = employees.filter(employee => staffingCategory(employee) === staffingRule.employmentType)
       const fallbackGap = `missing_${staffingRule.employmentType}_${dayKey}`
       const targetGap = `target_${staffingRule.employmentType}_${dayKey}`
@@ -515,7 +547,10 @@ export async function generateSchedule(input) {
       regularStaffingSlacks.push({ name: slack, coef: 1 })
       lp.bounds.push({ name: slack, type: glpk.GLP_LO, lb: 0, ub: 0 })
       // Preserve both shifts, even if the monthly rest quota makes regular-only coverage impossible.
-      lo(employees.flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), 1)
+      const coverage = employees.flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')])
+      if (rules.fixShiftStaffing) {
+        if (canFixShiftStaffing(date, employees, fixed, lockedThroughDate)) eq(coverage, shiftStaffingTargets(date, holidays, rules)[code])
+      } else lo(coverage, 1)
       if (rules.requireRegularEachShift) {
         lo([...employees.filter(e => e.employmentType === '정규직').flatMap(e => [variable(e.id, date, code), variable(e.id, date, 'full')]), { name: slack, coef: 1 }], 1)
       }
@@ -663,7 +698,9 @@ export async function generateSchedule(input) {
   if (![glpk.GLP_OPT, glpk.GLP_FEAS].includes(staffingSolution.result.status)) {
     const infeasible = staffingSolution.result.status === glpk.GLP_NOFEAS
     return { error: infeasible
-      ? '고정 근무·승인휴무와 필수 규칙을 함께 충족할 수 없습니다. 고정 입력 또는 상위 우선순위 규칙을 확인해 주세요. 기존 근무표는 유지했습니다.'
+      ? rules.fixShiftStaffing
+        ? '조별 고정 인원을 충족하는 편성이 없습니다. 재직 인원, 고정 근무와 휴무 조건을 확인해 주세요.'
+        : '고정 근무·승인휴무와 필수 규칙을 함께 충족할 수 없습니다. 고정 입력 또는 상위 우선순위 규칙을 확인해 주세요. 기존 근무표는 유지했습니다.'
       : '계산 시간 안에 조건을 충족하는 근무표를 찾지 못했습니다. 다시 탐색해 주세요. 기존 근무표는 유지했습니다.' }
   }
   // Strict feasibility proves zero rule/staffing gaps, not optimal fairness.
@@ -708,6 +745,17 @@ export async function generateSchedule(input) {
     lp.objective.vars.push(...requestPreferenceVars)
   }
   if (staffingIsOptimal) lp.objective.vars.push(...ruleViolationSlacks)
+  // Fixed staffing leaves surplus days as extra rest. Share them out instead of
+  // letting the solver pile them onto a few employees.
+  if (rules.fixShiftStaffing) {
+    lp.bounds.push({ name: 'extra_rest_max', type: glpk.GLP_LO, lb: 0, ub: 0 }, { name: 'extra_rest_min', type: glpk.GLP_LO, lb: 0, ub: 0 })
+    for (const employee of employees) {
+      const over = `monthly_rest_over_${employee.id}`
+      lo([{ name: 'extra_rest_max', coef: 1 }, { name: over, coef: -1 }], 0)
+      up([{ name: 'extra_rest_min', coef: 1 }, { name: over, coef: -1 }], 0)
+    }
+    lp.objective.vars.push({ name: 'extra_rest_max', coef: 1_000_000 }, { name: 'extra_rest_min', coef: -1_000_000 })
+  }
   for (const item of dailyShiftImbalanceSlacks) if (rules.openCloseBalanceWeight > 0) lp.objective.vars.push({ ...item, coef: 20_000 * rules.openCloseBalanceWeight * priorityFactor(rules, 'openCloseBalance') })
   for (const item of regularShiftImbalanceSlacks) if (rules.openCloseBalanceWeight > 0) lp.objective.vars.push({ ...item, coef: 20_000 * rules.openCloseBalanceWeight * priorityFactor(rules, 'openCloseBalance') })
   for (const date of input.prioritizeRegularCoverageDates ?? []) {

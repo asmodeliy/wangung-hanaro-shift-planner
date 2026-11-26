@@ -741,6 +741,7 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
       minimumEmployeesForGeneration: [0, 100],
       monthlyRestDays: [0, 31],
       weekdayTarget: [0, 100], weekendTarget: [0, 100], weekdayMinimum: [0, 100], weekendMinimum: [0, 100],
+      weekdayOpenStaff: [1, 100], weekdayCloseStaff: [1, 100], weekendOpenStaff: [1, 100], weekendCloseStaff: [1, 100],
       weekdayRegularTarget: [0, 100], weekdayRegularMinimum: [0, 100], weekdayContractTarget: [0, 100], weekdayContractMinimum: [0, 100],
       weekendRegularTarget: [0, 100], weekendRegularMinimum: [0, 100], weekendContractTarget: [0, 100], weekendContractMinimum: [0, 100],
       functionalMinOnDuty: [0, 100], supportMaxOff: [0, 100], produceOpenCount: [0, 100],
@@ -753,7 +754,9 @@ app.put('/api/settings', requireAdmin, async (req, res) => {
     if (operations.weekdayMinimum > operations.weekdayTarget || operations.weekendMinimum > operations.weekendTarget) return res.status(400).json({ error: '최소 근무인원은 목표 인원보다 클 수 없습니다.' })
     for (const prefix of ['weekday', 'weekend']) for (const type of ['Regular', 'Contract']) if (operations[`${prefix}${type}Minimum`] > operations[`${prefix}${type}Target`]) return res.status(400).json({ error: '담당 직무별 최소 인원은 해당 목표 인원보다 클 수 없습니다.' })
     settings.operations = { ...settings.operations, ...Object.fromEntries(Object.keys(ranges).map(key => [key, operations[key]])), staffingMode: operations.staffingMode, monthlyRestMode: operations.monthlyRestMode, requireRegularEachShift: operations.requireRegularEachShift, weekendRegularFullShift: operations.weekendRegularFullShift, requireProduceOpener: operations.requireProduceOpener, preventSimultaneousProduceRest: operations.preventSimultaneousProduceRest, noConsecutiveClose: operations.noConsecutiveClose, noFullCloseAdjacent: operations.noFullCloseAdjacent, allowFullShiftGeneration: operations.allowFullShiftGeneration, rulePriorities: { ...defaultRulePriorities, ...operations.rulePriorities } }
+    if (typeof operations.fixShiftStaffing !== 'boolean') return res.status(400).json({ error: '조별 인원 고정 설정을 확인해 주세요.' })
     settings.operations.capDailyStaffingAtTarget = operations.capDailyStaffingAtTarget
+    settings.operations.fixShiftStaffing = operations.fixShiftStaffing
   }
   // A settings update can never mark a month confirmed; only the validated endpoint can.
   await runTransaction(async () => {
@@ -1237,6 +1240,7 @@ app.post('/api/shifts/apply-option', requireAdmin, async (req, res, next) => {
     if (shifts.length !== dates.size * employeeIds.size || shifts.some(item => !employeeIds.has(Number(item.employeeId)) || !dates.has(item.date) || !['open', 'close', 'full', 'off'].includes(item.code))) return res.status(400).json({ error: '편성안의 직원·날짜·근무 항목이 올바르지 않습니다.' })
     if (new Set(shifts.map(item => `${item.employeeId}:${item.date}`)).size !== shifts.length) return res.status(400).json({ error: '편성안에 중복된 근무 칸이 있습니다.' })
     const issues = validateSchedule({ ...input, shifts }).issues
+    if (input.settings.operations.fixShiftStaffing && issues.some(issue => issue.text.includes('고정 인원 불일치'))) return res.status(422).json({ error: '조별 고정 인원을 충족하지 않는 편성안입니다. 다시 편성해 주세요.' })
     const regularEmployees = input.employees.filter(employee => employee.employmentType === '정규직')
     const hasAllRegularOffDay = input.settings.operations.requireRegularEachShift && monthDates(month).some(date => regularEmployees.length > 0 && regularEmployees.every(employee => !shifts.some(shift => Number(shift.employeeId) === employee.id && shift.date === date && shift.code !== 'off')))
     if (hasAllRegularOffDay) return res.status(422).json({ error: '정규직 전원이 쉬는 날짜가 포함된 편성안은 적용할 수 없습니다.' })

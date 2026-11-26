@@ -4,6 +4,39 @@ import { defaultRules, fallbackMinimumWorkersForDate, generateSchedule, isRequir
 
 const employees = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `직원${i + 1}`, employmentType: i < 3 ? '정규직' : '계약직', workRules: structuredClone(defaultRules) }))
 const base = () => ({ month: '2026-02', employees: structuredClone(employees), settings: { daysOffPairs: [{ employeeIds: [2, 7] }], operations: { weekdayTarget: 3, weekendTarget: 3, weekdayMinimum: 3, weekendMinimum: 3 } }, holidays: [] })
+test('조별 고정 모드는 평일과 주말·공휴일의 오픈·마감 인원을 각각 맞춘다', async () => {
+  const month = '2026-02'
+  const dates = monthDates(month)
+  const holidays = ['2026-02-02']
+  const openDates = ['2026-02-01', holidays[0], '2026-02-03']
+  const operations = { fixShiftStaffing: true, requireRegularEachShift: false, noConsecutiveClose: false, noFullCloseAdjacent: false }
+  const existingShifts = dates.filter(date => !openDates.includes(date)).flatMap(date =>
+    employees.map((employee, i) => ({ date, employeeId: employee.id, code: i < 2 ? 'open' : i < 4 ? 'close' : 'off', locked: true })))
+  const input = { month, employees, settings: { operations }, holidays, existingShifts, mode: 'rebalance', lockedThroughDate: '2026-01-31' }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  for (const [date, open] of openDates.map((date, index) => [date, index < 2 ? 2 : 3])) {
+    const codes = result.shifts.filter(shift => shift.date === date).map(shift => shift.code)
+    assert.equal(codes.filter(code => code === 'open').length, open)
+    assert.equal(codes.filter(code => code === 'close').length, 2)
+    assert.equal(codes.filter(code => code === 'off').length, 7 - open - 2)
+  }
+  const validation = validateSchedule({ ...input, shifts: result.shifts })
+  assert.ok(validation.warnings.some(issue => issue.text.includes('2026-02-04 오픈 고정 인원 불일치')))
+  assert.ok(!validation.issues.some(issue => openDates.includes(issue.date) && issue.text.includes('고정 인원 불일치')))
+  const pinned = employees.slice(0, 3).map(employee => ({ employeeId: employee.id, date: holidays[0], code: 'open', locked: true }))
+  const conflict = await generateSchedule({ ...input, existingShifts: [...existingShifts, ...pinned] })
+  assert.match(conflict.error, /2026-02-02 오픈 고정 근무 3명 \/ 기준 2명/)
+})
+test('조별 고정 모드의 한 달 편성은 남는 휴무를 직원에게 고르게 나눈다', async () => {
+  const month = '2026-12'
+  const input = { month, employees: structuredClone(employees), settings: { daysOffPairs: [], operations: { fixShiftStaffing: true } }, holidays: ['2026-12-25'], existingShifts: [], mode: 'replace', lockedThroughDate: '2026-11-30' }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  assert.ok(!validateSchedule({ ...input, shifts: result.shifts }).issues.length)
+  const rest = employees.map(employee => result.shifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off').length)
+  assert.ok(Math.max(...rest) - Math.min(...rest) <= 1, rest.join(','))
+})
 test('목표 인원 상한은 고정 근무를 유지하고 남는 인력을 휴무로 편성한다', async () => {
   const month = '2026-02'
   const dates = monthDates(month)

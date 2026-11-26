@@ -258,7 +258,9 @@ export function useApp() {
         ? `${todayKey}까지 지난 날짜는 유지하고, 이후 배정만 교체합니다.`
         : `${monthLabel(month)}은 지난 달이라 기존 배정은 모두 유지됩니다.`
     if (mode === 'replace' && !window.confirm(`${monthLabel(month)} 근무표를 새로 편성할까요?${autoApplyRecommended ? ' 추천안을 바로 적용합니다.' : ''} ${replacementScope}`)) return
-    if (mode === 'rebalance' && !window.confirm(`직접 입력해 고정한 근무와 ${todayKey}까지 지난 날짜는 유지하고, 이후 미고정 배정만 다시 편성합니다.${autoApplyRecommended ? ' 추천안을 바로 적용합니다.' : ''} 평일 ${settings.operations.weekdayTarget}명·주말 및 공휴일 ${settings.operations.weekendTarget}명을 목표로 하며, 최소 인원 기준은 각각 ${settings.operations.weekdayMinimum}명·${settings.operations.weekendMinimum}명입니다.`)) return
+    if (mode === 'rebalance' && !window.confirm(`직접 입력해 고정한 근무와 ${todayKey}까지 지난 날짜는 유지하고, 이후 미고정 배정만 다시 편성합니다.${autoApplyRecommended ? ' 추천안을 바로 적용합니다.' : ''} ${settings.operations.fixShiftStaffing
+      ? `오픈·마감 인원은 평일 ${settings.operations.weekdayOpenStaff}명·${settings.operations.weekdayCloseStaff}명, 주말 및 공휴일 ${settings.operations.weekendOpenStaff}명·${settings.operations.weekendCloseStaff}명으로 고정합니다.`
+      : `평일 ${settings.operations.weekdayTarget}명·주말 및 공휴일 ${settings.operations.weekendTarget}명을 목표로 하며, 최소 인원 기준은 각각 ${settings.operations.weekdayMinimum}명·${settings.operations.weekendMinimum}명입니다.`}`)) return
     setGenerating(true); setError('')
     try {
       const monthValue = monthKey(month)

@@ -135,11 +135,19 @@ export function WeekTable({ app }: { app: AppState }) {
         {weekDates.map((slot, column) => {
           if (!slot) return <th key={`blank-${column}`} className="grid-day is-blank">—</th>
           const off = slot.d.getDay() === 0 || slot.d.getDay() === 6 || holidayMap.has(slot.date)
-          const target = off ? settings.operations.weekendTarget : settings.operations.weekdayTarget
+          const ops = settings.operations
+          const target = off ? ops.weekendTarget : ops.weekdayTarget
           const assigned = shifts.filter(shift => shift.date === slot.date && ['open', 'close', 'full'].includes(shift.code)).length
+          const staffing = (['open', 'close'] as const).map(code => ({
+            label: code === 'open' ? '오픈' : '마감',
+            count: shifts.filter(shift => shift.date === slot.date && (shift.code === code || shift.code === 'full')).length,
+            target: code === 'open' ? (off ? ops.weekendOpenStaff : ops.weekdayOpenStaff) : (off ? ops.weekendCloseStaff : ops.weekdayCloseStaff),
+          }))
           return <th key={slot.date} className={`grid-day ${dayTone(slot.d.getDay(), holidayMap.has(slot.date))}`}>
             <span>{weekdays[slot.d.getDay()]}</span><b>{slot.day}일</b>
-            {app.isAdmin && <small className={assigned < target ? 'is-short' : ''}>출근 {assigned}/{target}</small>}
+            {app.isAdmin && (ops.fixShiftStaffing
+              ? staffing.map(item => <small key={item.label} className={item.count !== item.target ? 'is-short' : ''}>{item.label} {item.count}/{item.target}</small>)
+              : <small className={assigned < target ? 'is-short' : ''}>출근 {assigned}/{target}</small>)}
           </th>
         })}
         <th className="grid-total">월 합계</th>
