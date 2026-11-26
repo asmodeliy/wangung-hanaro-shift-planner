@@ -680,7 +680,26 @@ export async function generateSchedule(input) {
   // Only a proven conflict or an exhausted strict search allows priority-based
   // relaxation. A weighted sum alone can sacrifice a rule even when zero
   // violations are possible.
-  const strictNames = new Set([...ruleViolationSlacks, ...regularStaffingSlacks, ...dailyStaffingSlacks, ...fallbackStaffingSlacks, ...splitFallbackStaffingSlacks, ...splitTargetStaffingSlacks].map(item => item.name))
+  // With fixed headcounts, covering both shifts with regular staff is best effort
+  // only. Secure monthly rest first, otherwise a small regular team works every
+  // day while others rest. Any unavoidable shortfall is shared evenly.
+  if (rules.fixShiftStaffing) {
+    const shortfalls = employees.map(employee => `monthly_rest_under_${employee.id}`)
+    const restSolution = glpk.solve({
+      ...lp,
+      bounds: [...lp.bounds, { name: 'rest_short_max', type: glpk.GLP_LO, lb: 0, ub: 0 }],
+      subjectTo: [...lp.subjectTo, ...shortfalls.map((name, i) => ({ name: `rest_short_${i}`, vars: [{ name: 'rest_short_max', coef: 1 }, { name, coef: -1 }], bnds: { type: glpk.GLP_LO, lb: 0, ub: 0 } }))],
+      objective: { direction: glpk.GLP_MIN, name: 'monthly_rest_first', vars: [
+        ...ruleViolationSlacks.filter(item => item.priorityKey !== 'monthlyRest').map(item => ({ name: item.name, coef: 10_000 })),
+        { name: 'rest_short_max', coef: 1_000 },
+        ...shortfalls.map(name => ({ name, coef: 100 })),
+      ] },
+    }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: quickAlternativeSearch ? 5 : 10, mipgap: 0.001 })
+    if ([glpk.GLP_OPT, glpk.GLP_FEAS].includes(restSolution.result.status)) {
+      for (const name of shortfalls) up([{ name, coef: 1 }], Math.round(restSolution.result.vars[name] ?? 0))
+    }
+  }
+  const strictNames = new Set([...ruleViolationSlacks,...regularStaffingSlacks, ...dailyStaffingSlacks, ...fallbackStaffingSlacks, ...splitFallbackStaffingSlacks, ...splitTargetStaffingSlacks].map(item => item.name))
   const strictConstraints = [...strictNames].map((name, i) => ({ name: `strict_${i}`, vars: [{ name, coef: 1 }], bnds: { type: glpk.GLP_FX, lb: 0, ub: 0 } }))
   const strictSolution = glpk.solve({ ...lp, objective: { direction: glpk.GLP_MIN, name: 'all_rules_feasible', vars: [] }, subjectTo: [...lp.subjectTo, ...strictConstraints] }, { msglev: glpk.GLP_MSG_OFF, presol: true, tmlim: quickAlternativeSearch ? 10 : 15, mipgap: 0.05 })
   const strictFeasible = [glpk.GLP_OPT, glpk.GLP_FEAS].includes(strictSolution.result.status)

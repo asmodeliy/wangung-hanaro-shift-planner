@@ -37,6 +37,17 @@ test('조별 고정 모드의 한 달 편성은 남는 휴무를 직원에게 �
   const rest = employees.map(employee => result.shifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off').length)
   assert.ok(Math.max(...rest) - Math.min(...rest) <= 1, rest.join(','))
 })
+test('조별 고정 모드는 정규직이 적어도 월 휴무를 정규직 오픈·마감 배치보다 먼저 지킨다', async () => {
+  const team = structuredClone(employees).map(employee => ({ ...employee, employmentType: employee.id <= 2 ? '정규직' : '계약직' }))
+  const input = { month: '2026-12', employees: team, settings: { daysOffPairs: [], operations: { fixShiftStaffing: true } }, holidays: ['2026-12-25'], existingShifts: [], mode: 'replace', lockedThroughDate: '2026-11-30' }
+  const result = await generateSchedule(input)
+  assert.equal(result.error, undefined)
+  for (const employee of team) {
+    const rest = result.shifts.filter(shift => shift.employeeId === employee.id && shift.code === 'off').length
+    assert.ok(rest >= result.targetRestDays, `직원${employee.id} 휴무 ${rest}일`)
+  }
+  for (const date of monthDates(input.month)) assert.ok(result.shifts.some(shift => shift.date === date && shift.employeeId <= 2 && shift.code !== 'off'), date)
+})
 test('목표 인원 상한은 고정 근무를 유지하고 남는 인력을 휴무로 편성한다', async () => {
   const month = '2026-02'
   const dates = monthDates(month)
