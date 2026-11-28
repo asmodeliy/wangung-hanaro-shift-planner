@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import type { AppState } from '../hooks/useApp'
 import { monthKey, monthLabel, shiftText } from '../lib/schedule'
 import { Icon } from '../components/Icon'
@@ -44,6 +44,23 @@ export function SchedulePage({ app }: { app: AppState }) {
   const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null)
   const [dutyDialog, setDutyDialog] = useState(false)
   const [assigningDuty, setAssigningDuty] = useState(false)
+  const menuRef = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (menuRef.current?.hasAttribute('open') && !menuRef.current.contains(event.target as Node)) {
+        menuRef.current.removeAttribute('open')
+      }
+    }
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && menuRef.current?.hasAttribute('open')) menuRef.current.removeAttribute('open')
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [])
   const assignDuties = async () => {
     setAssigningDuty(true)
     app.setError('')
@@ -77,7 +94,7 @@ export function SchedulePage({ app }: { app: AppState }) {
           <button className="btn" disabled={generating} onClick={() => void generate(hasLockedShifts ? 'rebalance' : 'replace', true)}>
             {hasLockedShifts ? '추천안 바로 재편성' : '추천안 바로 적용'}
           </button>
-          <details className="menu">
+          <details className="menu" ref={menuRef}>
             <summary className="btn btn-ghost" aria-label="더보기">더보기 <span aria-hidden="true">▾</span></summary>
             <div className="menu-list" role="menu">
               <button role="menuitem" onClick={event => { closeMenu(event); void openScheduleHistory() }}>변경 이력 · 되돌리기</button>

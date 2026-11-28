@@ -28,7 +28,7 @@ export async function createOvertimeWorkbook(input) {
   workbook.creator = '왕궁농협 하나로마트'
   const used = new Set()
   for (const group of groups) {
-    const base = `${group.name} ${group.month}`.replace(/[\\/*?:\[\]]/g, ' ').slice(0, 31)
+    const base = `${group.name} ${group.month}`.replace(/[\\/*?:[\]]/g, ' ').slice(0, 31)
     let name = base, n = 2
     while (used.has(name)) { const suffix = ` (${n++})`; name = base.slice(0, 31 - suffix.length) + suffix }
     used.add(name)

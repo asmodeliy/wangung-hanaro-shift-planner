@@ -62,33 +62,43 @@ function dutyCandidates(app: AppState, date: string, period: 'morning' | 'aftern
 /** Seven-column store-duty overview shown with the monthly matrix. */
 function StoreDutyMonthGrid({ app }: { app: AppState }) {
   const { month, dayCount, calendarLead, activeEmployees, settings, isAdmin, saveStoreDuty } = app
-  return <section className="store-duty-month" aria-label="월별 매장 당번">
-    <header><b>매장 당번</b><span>날짜별 오전·오후 담당</span></header>
-    <div className="store-duty-month-grid">
-      {weekdays.map((weekday, index) => <b className={dayTone(index, false)} key={weekday}>{weekday}</b>)}
-      {Array.from({ length: calendarLead }, (_, index) => <span className="store-duty-month-blank" key={`blank-${index}`} />)}
-      {Array.from({ length: dayCount }, (_, index) => {
-        const date = dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1))
-        const duty = settings.storeDuties[date] ?? { morning: null, afternoon: null }
-        return <article key={date}>
-          <b className="store-duty-month-date">{index + 1}일</b>
-          {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
-            const label = periodIndex === 0 ? '오전' : '오후'
-            const selected = activeEmployees.find(employee => employee.id === duty[period])
-            const options = dutyCandidates(app, date, period)
-            return <div className="store-duty-month-row" key={period}>
-              <span>{label}</span>
-              {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
-                <option value="">미정</option>
-                {selected && !options.includes(selected) && <option value={selected.id} disabled>{selected.name} (재배정 필요)</option>}
-                {options.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
-              </select> : <strong>{selected?.name ?? '미정'}</strong>}
-            </div>
-          })}
-        </article>
-      })}
+  const assignedCount = Array.from({ length: dayCount }, (_, index) => {
+    const date = dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1))
+    const duty = settings.storeDuties[date]
+    return Number(Boolean(duty?.morning)) + Number(Boolean(duty?.afternoon))
+  }).reduce((sum, n) => sum + n, 0)
+  return <details className="store-duty-month" open aria-label="월별 매장 당번">
+    <summary className="store-duty-month-head">
+      <b>매장 당번</b>
+      <span>날짜별 오전·오후 담당 · 배정 {assignedCount}/{dayCount * 2}칸</span>
+    </summary>
+    <div className="store-duty-month-scroll">
+      <div className="store-duty-month-grid">
+        {weekdays.map((weekday, index) => <b className={dayTone(index, false)} key={weekday}>{weekday}</b>)}
+        {Array.from({ length: calendarLead }, (_, index) => <span className="store-duty-month-blank" key={`blank-${index}`} />)}
+        {Array.from({ length: dayCount }, (_, index) => {
+          const date = dateKey(new Date(month.getFullYear(), month.getMonth(), index + 1))
+          const duty = settings.storeDuties[date] ?? { morning: null, afternoon: null }
+          return <article key={date}>
+            <b className="store-duty-month-date">{index + 1}일</b>
+            {(['morning', 'afternoon'] as const).map((period, periodIndex) => {
+              const label = periodIndex === 0 ? '오전' : '오후'
+              const selected = activeEmployees.find(employee => employee.id === duty[period])
+              const options = dutyCandidates(app, date, period)
+              return <div className="store-duty-month-row" key={period}>
+                <span>{label}</span>
+                {isAdmin ? <select aria-label={`${index + 1}일 ${label} 매장 당번`} value={duty[period] ?? ''} onChange={event => void saveStoreDuty(date, period, event.target.value ? Number(event.target.value) : null)}>
+                  <option value="">미정</option>
+                  {selected && !options.includes(selected) && <option value={selected.id} disabled>{selected.name} (재배정 필요)</option>}
+                  {options.map(employee => <option value={employee.id} key={employee.id}>{employee.name}</option>)}
+                </select> : <strong>{selected?.name ?? '미정'}</strong>}
+              </div>
+            })}
+          </article>
+        })}
+      </div>
     </div>
-  </section>
+  </details>
 }
 
 /** Whole-month matrix: one row per employee, one column per day. */
@@ -136,7 +146,9 @@ export function WeekTable({ app }: { app: AppState }) {
           if (!slot) return <th key={`blank-${column}`} className="grid-day is-blank">—</th>
           const off = slot.d.getDay() === 0 || slot.d.getDay() === 6 || holidayMap.has(slot.date)
           const ops = settings.operations
-          const target = off ? ops.weekendTarget : ops.weekdayTarget
+          const target = ops.staffingMode === 'employmentType'
+            ? (off ? ops.weekendRegularTarget + ops.weekendContractTarget : ops.weekdayRegularTarget + ops.weekdayContractTarget)
+            : (off ? ops.weekendTarget : ops.weekdayTarget)
           const assigned = shifts.filter(shift => shift.date === slot.date && ['open', 'close', 'full'].includes(shift.code)).length
           const staffing = (['open', 'close'] as const).map(code => ({
             label: code === 'open' ? '오픈' : '마감',
@@ -209,7 +221,8 @@ export function MonthCalendar({ app }: { app: AppState }) {
               <div className="calendar-people">{people.length === 0 ? <small>—</small> : people.map(employee => {
                 const shift = shiftMap.get(`${employee.id}:${date}`)
                 const request = requests.find(item => item.employeeId === employee.id && item.date === date && item.status !== 'rejected')
-                const frozen = isLockedDate(date, settings) || shift?.locked
+                const explicitPastEdit = date < todayKey && settings.editablePastShiftDates.includes(date)
+                const frozen = isLockedDate(date, settings) || Boolean(shift?.locked && !explicitPastEdit)
                 return <span key={employee.id} className={`person ${frozen ? 'is-frozen' : ''}`} title={request ? `희망휴무 ${request.status === 'approved' ? '승인' : '신청'}` : undefined}>
                   {employee.name}{shift?.locked && ' ◆'}{request?.status === 'approved' && <i>희망</i>}
                 </span>
@@ -255,7 +268,8 @@ export function WeekCards({ app }: { app: AppState }) {
           const request = requests.find(item => item.employeeId === employee.id && item.date === slot.date && item.status !== 'rejected')
           const own = user?.role === 'employee' && employee.id === user.employeeId
           const hours = shiftHours(employee, shift, settings, isAdmin)
-          const frozen = isLockedDate(slot.date, settings) || Boolean(shift?.locked)
+          const explicitPastEdit = slot.date < todayKey && settings.editablePastShiftDates.includes(slot.date)
+          const frozen = isLockedDate(slot.date, settings) || Boolean(shift?.locked && !explicitPastEdit)
           return <li key={employee.id}>
             <button type="button" className={`day-row ${own ? 'is-own' : ''}`} disabled={!isAdmin || frozen} onClick={() => void saveShift(employee.id, slot.day, cycleShift(employee, slot.date, shift))}>
               <span className={`avatar tone-${index % 5}`} aria-hidden="true">{employee.name.slice(-1)}</span>

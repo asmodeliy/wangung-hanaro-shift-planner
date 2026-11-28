@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AppState } from '../hooks/useApp'
 import type { NumericOperation, Operations, RulePriorityKey, Settings, Times } from '../types'
 import { monthKey, monthLabel, shiftTime, shiftTimeGroup } from '../lib/schedule'
@@ -66,12 +66,19 @@ function DateList({ dates, emptyText, onRemove, suffix }: { dates: string[]; emp
   return <ul className="date-chips">{dates.map(date => <li key={date}><button type="button" onClick={() => onRemove(date)} title={suffix}>{date} <span aria-hidden="true">×</span></button></li>)}</ul>
 }
 
-export function SettingsPage({ app }: { app: AppState }) {
+export function SettingsPage({ app, onDirtyChange }: { app: AppState; onDirtyChange?: (dirty: boolean) => void }) {
   const {
     settings, setSettings, saveSettings, employees, activeEmployees, accounts, user, load, month, changeMonth, restTarget, holidays,
-    holidayDate, setHolidayDate, addHoliday, produceExceptionDate, setProduceExceptionDate, pastEditDate, setPastEditDate,
+    holidayDate, setHolidayDate, produceExceptionDate, setProduceExceptionDate, pastEditDate, setPastEditDate,
   } = app
   const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => { window.removeEventListener('beforeunload', warn); onDirtyChange?.(false) }
+  }, [dirty, onDirtyChange])
   const update = (recipe: (value: Settings) => Settings) => { setSettings(recipe); setDirty(true) }
   const setOp = <K extends keyof Operations>(key: K, value: Operations[K]) => update(current => ({ ...current, operations: { ...current.operations, [key]: value } }))
   const ops = settings.operations
@@ -112,7 +119,7 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="muted small">컴포즈 그룹의 근무일에는 컴포즈 시간이 적용됩니다. 농산 담당·대직자는 별도 오픈 시간을 사용합니다.</p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad settings-card-duties">
         <h2>매장 당번 그룹</h2>
         <p className="muted small">자동 배정은 사무실 외 직원, 컴포즈 외 직원 순으로 우선합니다. 정육 담당은 당번에서 제외합니다.</p>
         {([['office', '사무실'], ['compose', '컴포즈'], ['butcher', '정육']] as const).map(([group, label]) => <details key={group}>
@@ -174,11 +181,11 @@ export function SettingsPage({ app }: { app: AppState }) {
         <p className="big-number">{restTarget}<small>일</small><span>직원별 기준 휴무</span></p>
         {monthHolidays.length === 0 ? <p className="muted small">이번 달 공휴일이 없습니다.</p> : <ul className="list">{monthHolidays.map(item => <li key={item.date}>
           <span><b>{item.date.slice(5).replace('-', '월 ')}일</b> {item.name}</span>
-          {settings.additionalHolidays.includes(item.date) && <button className="btn btn-sm btn-danger-ghost" onClick={() => void saveSettings({ ...settings, additionalHolidays: settings.additionalHolidays.filter(date => date !== item.date) })}>삭제</button>}
+          {settings.additionalHolidays.includes(item.date) && <button className="btn btn-sm btn-danger-ghost" onClick={() => { void saveSettings({ ...settings, additionalHolidays: settings.additionalHolidays.filter(date => date !== item.date) }); setDirty(false) }}>삭제</button>}
         </li>)}</ul>}
         <span className="inline">
           <input type="date" value={holidayDate} onChange={event => setHolidayDate(event.target.value)} aria-label="추가 공휴일"/>
-          <button className="btn btn-sm" disabled={!holidayDate} onClick={() => void addHoliday()}>임시 공휴일 추가</button>
+          <button className="btn btn-sm" disabled={!holidayDate} onClick={() => { if (!holidayDate) return; void saveSettings({ ...settings, additionalHolidays: [...new Set([...settings.additionalHolidays, holidayDate])].sort() }); setHolidayDate(''); setDirty(false) }}>임시 공휴일 추가</button>
         </span>
       </section>
 

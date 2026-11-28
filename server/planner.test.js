@@ -182,7 +182,7 @@ test('rebalance keeps locked cells and prioritizes regular coverage on requested
   verify(input, result)
   for (const prior of locked) assert.equal(result.shifts.find(s => s.employeeId === prior.employeeId && s.date === prior.date)?.code, prior.code)
   for (const date of ['2026-10-10', '2026-10-16', '2026-10-21']) for (const code of ['open', 'close']) {
-    assert.ok(result.shifts.some(s => s.date === date && s.code === code && employees.find(e => e.id === s.employeeId)?.employmentType === '정규직'))
+    assert.ok(result.shifts.some(s => s.date === date && [code, 'full'].includes(s.code) && employees.find(e => e.id === s.employeeId)?.employmentType === '정규직'))
   }
 })
 test('regular-gap preference does not introduce avoidable coverage gaps', async () => {

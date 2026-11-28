@@ -52,7 +52,7 @@ export async function createOvertimeHwpxFiles(input) {
       zip.file('mimetype', await zip.file('mimetype').async('nodebuffer'), { compression: 'STORE' })
       zip.remove('Preview/PrvImage.png')
       zip.file('Preview/PrvText.txt', `${group.month} ${group.name} 시간외(휴일)근무 명령부`)
-      const safeName = group.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+      const safeName = [...group.name].map(ch => ch.charCodeAt(0) < 32 || /[\\/:*?"<>|]/.test(ch) ? '_' : ch).join('')
       files.push({ name: `${safeName}_${group.id}_${group.month}_${Math.floor(offset/11)+1}.hwpx`, data: await zip.generateAsync({ type:'nodebuffer', compression:'DEFLATE' }) })
     }
   }

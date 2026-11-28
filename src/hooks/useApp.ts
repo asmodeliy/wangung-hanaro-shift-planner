@@ -184,8 +184,9 @@ export function useApp() {
   const logout = async () => { try { await api('/api/auth/logout', { method: 'POST' }) } finally { setUser(null); setPage('schedule'); setEmployees([]); setShifts([]); setRequests([]) } }
   const saveShift = async (employeeId: number, day: number, code: ShiftCode | '') => {
     const date = dateKey(new Date(month.getFullYear(), month.getMonth(), day))
+    const explicitPastEdit = date < todayKey && settings.editablePastShiftDates.includes(date)
     if (isLockedDate(date, settings)) { setError(`${date}는 지난 날짜라 고정되어 수정할 수 없습니다.`); return }
-    if (shiftMap.get(`${employeeId}:${date}`)?.locked) { setError(`${date}에 입력한 근무는 확정되어 수정할 수 없습니다.`); return }
+    if (shiftMap.get(`${employeeId}:${date}`)?.locked && !explicitPastEdit) { setError(`${date}에 입력한 근무는 확정되어 수정할 수 없습니다.`); return }
     if (confirmed && !window.confirm('확정된 근무표를 수정하면 확정이 해제됩니다. 대직자와 필수업무 담당자 일정을 확인한 뒤 변경할까요?')) return
     const previous = shifts
     const employee = employees.find(item => item.id === employeeId)

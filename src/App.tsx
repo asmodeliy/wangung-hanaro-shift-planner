@@ -1,5 +1,5 @@
 import './ui.css'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp } from './hooks/useApp'
 import type { Page } from './types'
 import { BrandMark, Icon } from './components/Icon'
@@ -19,6 +19,13 @@ function App() {
   const app = useApp()
   const [navOpen, setNavOpen] = useState(false)
   const [attendanceDirty, setAttendanceDirty] = useState(false)
+  const [settingsDirty, setSettingsDirty] = useState(false)
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setNavOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
   const [dismissedAccountNotices, setDismissedAccountNotices] = useState<string[]>(() => [
     ...(localStorage.getItem('wangung-account-notice:testadmin-20261015') === 'dismissed' ? ['testadmin'] : []),
     ...(localStorage.getItem('wangung-account-notice:charm1596-20261018-auto-apply') === 'dismissed' ? ['charm1596'] : []),
@@ -35,13 +42,19 @@ function App() {
   const pages: Page[] = isAdmin ? ['schedule', 'requests', 'attendance', 'feedback', 'employees', 'settings'] : ['schedule', 'requests', 'feedback']
   const accountNoticeUsers = ['testadmin', 'charm1596']
   const showAccountNotice = accountNoticeUsers.includes(user.username) && !dismissedAccountNotices.includes(user.username)
-  const canLeaveAttendance = () => page !== 'attendance' || !attendanceDirty || window.confirm('저장하지 않은 실근무 수정은 월간 근무표와 내보내기에 반영되지 않습니다. 이 화면을 나갈까요?')
+  const canLeavePage = () => {
+    if (page === 'attendance' && attendanceDirty) return window.confirm('저장하지 않은 실근무 수정은 월간 근무표와 내보내기에 반영되지 않습니다. 이 화면을 나갈까요?')
+    if (page === 'settings' && settingsDirty) return window.confirm('저장하지 않은 운영 설정 변경이 있습니다. 저장하지 않고 다른 화면으로 이동할까요?')
+    return true
+  }
   return <div className="shell">
     <div className="nav-edge" aria-hidden="true"/>
+    {navOpen && <div className="sidebar-backdrop" aria-hidden="true" onClick={() => setNavOpen(false)}/>}
     <aside className={`sidebar ${navOpen ? 'is-open' : ''}`} onMouseLeave={() => setNavOpen(false)}>
-      <div className="brand"><BrandMark/><div><strong>왕궁농협</strong><span>하나로마트</span></div></div>
+      <div className="brand"><BrandMark/><div><strong>왕궁농협</strong><span>하나로마트</span></div><button type="button" className="icon-btn sidebar-close" aria-label="메뉴 닫기" onClick={() => setNavOpen(false)}>×</button></div>
       <nav aria-label="주 메뉴">{pages.map(item => <button key={item} title={pageTitle[item]} className={page === item ? 'is-active' : ''} aria-current={page === item ? 'page' : undefined} onClick={() => {
-        if (item !== page && !canLeaveAttendance()) return
+        if (item !== page && !canLeavePage()) return
+        if (item !== page && page === 'settings') setSettingsDirty(false)
         if (item === 'feedback' && page !== 'feedback') setFeedbackOrigin(page)
         if (item === 'schedule' && page !== 'schedule') void app.load()
         setPage(item); setNavOpen(false)
@@ -61,7 +74,7 @@ function App() {
         <span className="topbar-title">{pageTitle[page]}</span>
         <span className="spacer"/>
         <button className="btn btn-ghost btn-sm topbar-action" aria-label="비밀번호 변경" onClick={() => { setError(''); setShowPasswordDialog(true) }}><Icon name="key" size={15}/><span className="topbar-label">비밀번호 변경</span></button>
-        <button className="btn btn-ghost btn-sm topbar-action" aria-label="로그아웃" onClick={() => { if (canLeaveAttendance()) void logout() }}><Icon name="logout" size={15}/><span className="topbar-label">로그아웃</span></button>
+        <button className="btn btn-ghost btn-sm topbar-action" aria-label="로그아웃" onClick={() => { if (canLeavePage()) void logout() }}><Icon name="logout" size={15}/><span className="topbar-label">로그아웃</span></button>
       </header>
       <main className="content">
         {error && <div className="alert alert-error" role="alert"><p>{error}</p><button className="btn btn-sm" onClick={() => setError('')}>확인</button></div>}
@@ -76,7 +89,7 @@ function App() {
         {page === 'schedule' && <SchedulePage app={app}/>}
         {page === 'requests' && <RequestsPage app={app}/>}
         {page === 'employees' && isAdmin && <EmployeesPage app={app}/>}
-        {page === 'settings' && isAdmin && <SettingsPage app={app}/>}
+        {page === 'settings' && isAdmin && <SettingsPage app={app} onDirtyChange={setSettingsDirty}/>}
         {page === 'attendance' && isAdmin && <AttendancePage onDirtyChange={setAttendanceDirty}/>}
         {page === 'feedback' && <FeedbackPage initialPage={feedbackOrigin}/>}
       </main>
